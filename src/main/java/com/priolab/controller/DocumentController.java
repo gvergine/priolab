@@ -1,6 +1,7 @@
 package com.priolab.controller;
 
 import com.priolab.doc.Document;
+import com.priolab.model.ItemScore;
 import com.priolab.model.PrioItem;
 import com.priolab.model.ScoredItem;
 
@@ -60,31 +61,66 @@ public class DocumentController {
     private TableView<ScoredItem> rightTable;
 
     private HostServices hostServices;
+    private Document document;
 
     /** The result table's backing list, kept sorted by WSJF. */
     private final ObservableList<ScoredItem> rightItems = FXCollections.observableArrayList();
 
     /** Bind the view to a document and build the two tables' columns. */
     public void init(Document document, HostServices hostServices) {
+        this.document = document;
         this.hostServices = hostServices;
         buildLeftTable();
         buildRightTable();
         rightTable.setItems(rightItems);
     }
 
-    /** Replace the items shown in both tables (fresh, unscored). */
+    /**
+     * Replace the items shown in both tables with exactly what the connector
+     * returned. Items whose id already has a score stored in the project file
+     * come back with their dropdowns pre-filled.
+     */
     public void setItems(List<PrioItem> items) {
         List<ScoredItem> scored = new ArrayList<>(items.size());
         int order = 1;
         for (PrioItem item : items) {
             ScoredItem si = new ScoredItem(item, order++);
+            // Seed from the stored score first, so restoring it is not an edit.
+            applyStoredScore(si);
             // Re-sort the result table whenever this item's WSJF changes.
             si.wsjfProperty().addListener((obs, oldVal, newVal) -> resortRight());
+            // Any later change is a user edit: write it back and mark dirty.
+            ChangeListener<Integer> persist = (obs, oldVal, newVal) -> storeScore(si);
+            si.businessValueProperty().addListener(persist);
+            si.timeCriticalityProperty().addListener(persist);
+            si.riskReductionProperty().addListener(persist);
+            si.jobSizeProperty().addListener(persist);
             scored.add(si);
         }
         leftTable.getItems().setAll(scored);
         rightItems.setAll(scored);
         resortRight();
+    }
+
+    /** Pre-fill an item's dropdowns from the score stored for its id, if any. */
+    private void applyStoredScore(ScoredItem si) {
+        ItemScore stored = document.getItemScore(si.item().id());
+        if (stored == null) {
+            return;
+        }
+        si.businessValueProperty().set(stored.businessValue());
+        si.timeCriticalityProperty().set(stored.timeCriticality());
+        si.riskReductionProperty().set(stored.riskReduction());
+        si.jobSizeProperty().set(stored.jobSize());
+    }
+
+    /** Write an item's current dropdown values into the document (marks it dirty). */
+    private void storeScore(ScoredItem si) {
+        document.setItemScore(si.item().id(), new ItemScore(
+                si.businessValueProperty().get(),
+                si.timeCriticalityProperty().get(),
+                si.riskReductionProperty().get(),
+                si.jobSizeProperty().get()));
     }
 
     // --- Table construction --------------------------------------------------

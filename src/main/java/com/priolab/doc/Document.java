@@ -1,6 +1,7 @@
 package com.priolab.doc;
 
 import com.priolab.db.Database;
+import com.priolab.model.ItemScore;
 
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.ReadOnlyBooleanProperty;
@@ -21,7 +22,8 @@ import java.util.Objects;
  * <p>The editable fields are the name of the selected connector (stored in the
  * {@code meta} table under the key {@code connector}) and the per-connector
  * setting values the user assigns to the connector's declared keys (stored in
- * the {@code connector_settings} table). The {@link #dirtyProperty() dirty} flag
+ * the {@code connector_settings} table) and the per-item WSJF scores keyed by
+ * item id (stored in the {@code item_scores} table). The {@link #dirtyProperty() dirty} flag
  * tracks whether any in-memory value has diverged from what is persisted, so the
  * UI can prompt to save.
  */
@@ -48,6 +50,16 @@ public class Document implements AutoCloseable {
      */
     private Map<String, Map<String, String>> savedSettings = new HashMap<>();
     private Map<String, Map<String, String>> editSettings = new HashMap<>();
+
+    /**
+     * Per-item WSJF scores, {@code item id -> score}. Scores that carry nothing
+     * ({@link ItemScore#isEmpty()}) are normalised away, so the two maps compare
+     * cleanly for the dirty check. Holds every score in the project, not just
+     * the items the last connector run returned, so scores for items that are
+     * temporarily absent survive.
+     */
+    private Map<String, ItemScore> savedScores = new HashMap<>();
+    private Map<String, ItemScore> editScores = new HashMap<>();
 
     private Document(Database database, Path path) {
         this.database = database;
@@ -81,6 +93,8 @@ public class Document implements AutoCloseable {
         selectedConnector.set(savedConnector);
         this.savedSettings = database.getAllConnectorSettings();
         this.editSettings = deepCopy(savedSettings);
+        this.savedScores = database.getAllItemScores();
+        this.editScores = new HashMap<>(savedScores);
         dirty.set(false);
     }
 
@@ -108,7 +122,37 @@ public class Document implements AutoCloseable {
         }
 
         savedSettings = deepCopy(editSettings);
+
+        // Same upsert-then-delete pass for the per-item scores.
+        for (var entry : editScores.entrySet()) {
+            database.putItemScore(entry.getKey(), entry.getValue());
+        }
+        for (String id : savedScores.keySet()) {
+            if (!editScores.containsKey(id)) {
+                database.deleteItemScore(id);
+            }
+        }
+        savedScores = new HashMap<>(editScores);
+
         dirty.set(false);
+    }
+
+    /** The stored score for {@code itemId}, or {@code null} if it has none. */
+    public ItemScore getItemScore(String itemId) {
+        return editScores.get(itemId);
+    }
+
+    /**
+     * Record the WSJF scores for {@code itemId}. A score with nothing set is
+     * treated as no score at all. Updates the {@link #dirtyProperty() dirty} flag.
+     */
+    public void setItemScore(String itemId, ItemScore score) {
+        if (score == null || score.isEmpty()) {
+            editScores.remove(itemId);
+        } else {
+            editScores.put(itemId, score);
+        }
+        recomputeDirty();
     }
 
     /** The in-memory value assigned to {@code key} of {@code connector} ({@code ""} if unset). */
@@ -139,7 +183,8 @@ public class Document implements AutoCloseable {
 
     private void recomputeDirty() {
         dirty.set(!Objects.equals(selectedConnector.get(), savedConnector)
-                || !editSettings.equals(savedSettings));
+                || !editSettings.equals(savedSettings)
+                || !editScores.equals(savedScores));
     }
 
     private static Map<String, Map<String, String>> deepCopy(

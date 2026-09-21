@@ -1,5 +1,7 @@
 package com.priolab.db;
 
+import com.priolab.model.ItemScore;
+
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -7,6 +9,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.sql.Types;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -55,6 +58,11 @@ public class Database implements AutoCloseable {
                     "CREATE TABLE IF NOT EXISTS connector_settings ("
                             + "connector TEXT NOT NULL, key TEXT NOT NULL, value TEXT, "
                             + "PRIMARY KEY (connector, key))");
+            st.executeUpdate(
+                    "CREATE TABLE IF NOT EXISTS item_scores ("
+                            + "id TEXT PRIMARY KEY, "
+                            + "business_value INTEGER, time_criticality INTEGER, "
+                            + "risk_reduction INTEGER, job_size INTEGER)");
         }
     }
 
@@ -129,6 +137,72 @@ public class Database implements AutoCloseable {
             ps.setString(1, connector);
             ps.setString(2, key);
             ps.executeUpdate();
+        }
+    }
+
+    /**
+     * Read every stored item score, keyed by item id. Returns an empty map if
+     * the database is not open.
+     */
+    public Map<String, ItemScore> getAllItemScores() throws SQLException {
+        Map<String, ItemScore> out = new HashMap<>();
+        if (connection == null) {
+            return out;
+        }
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT id, business_value, time_criticality, risk_reduction, job_size "
+                             + "FROM item_scores")) {
+            while (rs.next()) {
+                out.put(rs.getString(1), new ItemScore(
+                        nullableInt(rs, 2), nullableInt(rs, 3),
+                        nullableInt(rs, 4), nullableInt(rs, 5)));
+            }
+        }
+        return out;
+    }
+
+    /** Insert or update the stored score for one item id. */
+    public void putItemScore(String id, ItemScore score) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO item_scores(id, business_value, time_criticality, "
+                        + "risk_reduction, job_size) VALUES(?, ?, ?, ?, ?) "
+                        + "ON CONFLICT(id) DO UPDATE SET "
+                        + "business_value = excluded.business_value, "
+                        + "time_criticality = excluded.time_criticality, "
+                        + "risk_reduction = excluded.risk_reduction, "
+                        + "job_size = excluded.job_size")) {
+            ps.setString(1, id);
+            setNullableInt(ps, 2, score.businessValue());
+            setNullableInt(ps, 3, score.timeCriticality());
+            setNullableInt(ps, 4, score.riskReduction());
+            setNullableInt(ps, 5, score.jobSize());
+            ps.executeUpdate();
+        }
+    }
+
+    /** Remove the stored score for one item id, if present. */
+    public void deleteItemScore(String id) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM item_scores WHERE id = ?")) {
+            ps.setString(1, id);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Read an INTEGER column that may be SQL NULL. */
+    private static Integer nullableInt(ResultSet rs, int column) throws SQLException {
+        int value = rs.getInt(column);
+        return rs.wasNull() ? null : value;
+    }
+
+    /** Bind an INTEGER parameter that may be {@code null}. */
+    private static void setNullableInt(PreparedStatement ps, int index, Integer value)
+            throws SQLException {
+        if (value == null) {
+            ps.setNull(index, Types.INTEGER);
+        } else {
+            ps.setInt(index, value);
         }
     }
 

@@ -107,7 +107,11 @@ request/response comms.
 driver is loaded through the JDBC `ServiceLoader`, so no explicit
 `requires org.xerial.sqlitejdbc` in `module-info` — only `requires java.sql`.
 `Database` also exposes a small `meta(key, value)` key/value table
-(`ensureSchema`, `getMeta`, `putMeta`) used to store project metadata.
+(`ensureSchema`, `getMeta`, `putMeta`) used to store project metadata, plus the
+`connector_settings(connector, key, value)` and `item_scores(id, business_value,
+time_criticality, risk_reduction, job_size)` tables. `ensureSchema()` is
+`CREATE TABLE IF NOT EXISTS` throughout, so opening an older project file just
+adds the missing tables.
 
 ### New Project
 `File ▸ New Project…` opens a small **modal** wizard (`newproject.fxml` /
@@ -166,8 +170,26 @@ scoring state). Each row's `id` is a `Hyperlink` that opens the item's `url` via
   list (`FXCollections.sort` + `refresh()`) on every change, so editing a score
   on the left instantly reorders the result on the right.
 
-Scores are in-memory only for now (not persisted); a fresh run rebuilds unscored
-items.
+**Score persistence.** The four dropdown values are stored per item **id** in the
+`item_scores` table — only the id and the four numbers, nothing else about the
+item. `Document` holds them as `id -> ItemScore` (`model/ItemScore.java`, a record
+of four nullable `Integer`s) in the same saved/edit pair used for connector
+settings, so:
+
+- editing any dropdown calls `Document.setItemScore(...)`, which **marks the
+  document dirty** (title gets a `*`, and the Yes/No/Cancel prompt guards
+  New/Open/Exit/close);
+- a score with all four values blank is normalised away and its row is deleted
+  on save;
+- `Document` keeps **every** stored score, not just the items of the last run, so
+  scores for items a run did not return are preserved and reappear when those
+  items come back.
+
+**A connector run shows exactly what the connector returned** — stored scores
+never add rows. `DocumentController.setItems(...)` seeds each item from
+`Document.getItemScore(id)` *before* attaching the write-back listeners, so
+restoring a score is not itself an edit and does not dirty the document; ids with
+no stored score simply start blank.
 
 Unsaved-changes handling: `New Project`, `Open`, `Exit`, and the window's close
 button all route through `MainController.maybeSaveCurrent()` (Yes/No/Cancel);
@@ -198,6 +220,7 @@ src/main/java/com/priolab/
   db/Database.java                 SQLite JDBC wrapper + meta / connector_settings
   model/PrioItem.java              one item to prioritize (id/description/url)
   model/ScoredItem.java            PrioItem + WSJF inputs + computed WSJF
+  model/ItemScore.java             the four stored WSJF inputs, keyed by item id
 src/main/resources/com/priolab/
   fxml/wizard.fxml
   fxml/newproject.fxml
