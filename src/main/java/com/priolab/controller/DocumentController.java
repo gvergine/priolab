@@ -111,7 +111,8 @@ public class DocumentController {
 
     private TableColumn<ScoredItem, Integer> orderColumn() {
         TableColumn<ScoredItem, Integer> col = new TableColumn<>("Order");
-        col.setPrefWidth(55);
+        col.setPrefWidth(52);
+        col.setMinWidth(44);
         col.setCellValueFactory(cd -> new ReadOnlyObjectWrapper<>(cd.getValue().order()));
         return col;
     }
@@ -159,7 +160,8 @@ public class DocumentController {
 
     private TableColumn<ScoredItem, ScoredItem> idColumn() {
         TableColumn<ScoredItem, ScoredItem> col = new TableColumn<>("ID");
-        col.setPrefWidth(90);
+        col.setPrefWidth(86);
+        col.setMinWidth(60);
         col.setCellValueFactory(cd -> new ReadOnlyObjectWrapper<>(cd.getValue()));
         col.setComparator(Comparator.comparing(
                 si -> si.item().id(), Comparator.nullsFirst(Comparator.naturalOrder())));
@@ -169,7 +171,8 @@ public class DocumentController {
 
     private TableColumn<ScoredItem, String> descriptionColumn() {
         TableColumn<ScoredItem, String> col = new TableColumn<>("Description");
-        col.setPrefWidth(220);
+        col.setPrefWidth(180);
+        col.setMinWidth(70);
         col.setCellValueFactory(cd ->
                 new ReadOnlyStringWrapper(cd.getValue().item().description()));
         return col;
@@ -177,7 +180,8 @@ public class DocumentController {
 
     private TableColumn<ScoredItem, Double> wsjfColumn() {
         TableColumn<ScoredItem, Double> col = new TableColumn<>("WSJF");
-        col.setPrefWidth(70);
+        col.setPrefWidth(62);
+        col.setMinWidth(50);
         col.setCellValueFactory(cd -> cd.getValue().wsjfProperty());
         col.setCellFactory(c -> new TableCell<>() {
             @Override
@@ -192,7 +196,10 @@ public class DocumentController {
     private TableColumn<ScoredItem, Integer> scoreColumn(
             String title, Function<ScoredItem, ObjectProperty<Integer>> extractor) {
         TableColumn<ScoredItem, Integer> col = new TableColumn<>(title);
-        col.setPrefWidth(90);
+        col.setPrefWidth(74);
+        // Floor the width: below this the ComboBox has no room to draw the
+        // selected number and renders blank, which looks like a lost selection.
+        col.setMinWidth(56);
         col.setSortable(false);
         col.setCellValueFactory(cd -> extractor.apply(cd.getValue()));
         col.setCellFactory(c -> new ScoreCell(extractor));
@@ -274,7 +281,8 @@ public class DocumentController {
         ScoreCell(Function<ScoredItem, ObjectProperty<Integer>> extractor) {
             this.extractor = extractor;
             combo.setMaxWidth(Double.MAX_VALUE);
-            combo.getItems().add(null); // "Undefined"
+            combo.getStyleClass().add("score-combo");
+            combo.getItems().add(null); // blank = undefined
             combo.getItems().addAll(SCORE_OPTIONS);
             combo.setConverter(new StringConverter<>() {
                 @Override

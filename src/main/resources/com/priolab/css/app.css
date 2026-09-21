@@ -50,6 +50,20 @@
     -fx-text-fill: #444444;
 }
 
+/* Score dropdowns sit in narrow columns: trim the padding so the selected
+   number still has room to render instead of being clipped away. */
+.score-combo {
+    -fx-padding: 0;
+}
+
+.score-combo > .list-cell {
+    -fx-padding: 2 2 2 4;
+}
+
+.score-combo > .arrow-button {
+    -fx-padding: 2 4 2 2;
+}
+
 /* Rows in the left table that are not fully scored yet. */
 .table-row-cell:incomplete {
     -fx-background: #fffbcc;
