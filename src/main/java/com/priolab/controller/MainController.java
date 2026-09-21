@@ -103,6 +103,7 @@ public class MainController {
             dialog.initOwner(app.getStage());
             dialog.initModality(Modality.APPLICATION_MODAL);
             dialog.setTitle("New Project");
+            App.applyIcon(dialog);
             Scene scene = new Scene(root, 480, 300);
             scene.getStylesheets().add(
                     getClass().getResource("/com/priolab/css/app.css").toExternalForm());
@@ -402,6 +403,7 @@ public class MainController {
             dialog.initOwner(app.getStage());
             dialog.initModality(Modality.APPLICATION_MODAL);
             dialog.setTitle("Connector Settings");
+            App.applyIcon(dialog);
             Scene scene = new Scene(root, 420, 380);
             scene.getStylesheets().add(
                     getClass().getResource("/com/priolab/css/app.css").toExternalForm());

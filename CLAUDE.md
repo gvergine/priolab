@@ -23,6 +23,7 @@ over stdin/stdout.
 ./gradlew compileJava  # compile only
 ./gradlew jlink        # self-contained runtime image -> build/image, build/jpackage/priolab
 ./gradlew jpackage     # native installer for the current OS
+./gradlew appimage     # portable, install-free Linux AppImage
 ```
 
 Installer output:
@@ -31,6 +32,32 @@ Installer output:
   Windows* — `jpackage` only produces the host OS's installer format.
 
 The installer bundles its own JRE, so end users don't need Java installed.
+
+### AppImage (no installation)
+
+`./gradlew appimage` wraps the very same jpackage **app image** (app + bundled
+JRE) into a single file:
+`build/distributions/PrioLab-<version>-x86_64.AppImage`. The user downloads it,
+sets the executable bit (`chmod +x`, or *Properties ▸ Allow executing*) and
+double-clicks it — nothing is installed and nothing but `~/.priolab` is written.
+
+Three tasks make it up:
+- `fetchAppImageTool` — downloads `appimagetool` to `build/tools/` (needs
+  network; set `APPIMAGETOOL=/path/to/appimagetool` to use a local copy
+  instead). `appimagetool` in turn fetches the AppImage *runtime* it embeds.
+- `appDir` — assembles `build/AppDir`: the jpackage image under `usr/`, plus the
+  `AppRun` launcher and `priolab.desktop` from `packaging/appimage/`, and the
+  app icon `src/main/resources/com/priolab/img/priolab.png` — one PNG serves the
+  JavaFX stage, `jpackage --icon` and the AppImage. It wipes
+  the AppDir first, because the jlink runtime's `legal/` files are read-only and
+  cannot be copied over in place.
+- `appimage` — runs `appimagetool` over the AppDir. It is invoked with
+  `--appimage-extract-and-run` so the *build* works without FUSE; the resulting
+  AppImage still uses FUSE at run time on the user's machine, and falls back to
+  `./PrioLab-….AppImage --appimage-extract-and-run` where FUSE is missing.
+
+`appimage` is deliberately not wired into `build`/`assemble` — it needs network
+access on the first run.
 
 ## Runtime behavior
 
@@ -200,8 +227,11 @@ in `App.showMain()`.
 ## Project layout
 
 ```
-build.gradle                       Groovy build, JavaFX + jlink/jpackage config
+build.gradle                       Groovy build, JavaFX + jlink/jpackage/appimage config
 settings.gradle
+packaging/appimage/                AppImage assets
+  AppRun                           entry point -> usr/bin/priolab
+  priolab.desktop                  desktop entry (also used for the menu entry)
 src/main/java/module-info.java     module com.priolab
 src/main/java/com/priolab/
   App.java                         Application entry; chooses wizard vs main
@@ -222,6 +252,7 @@ src/main/java/com/priolab/
   model/ScoredItem.java            PrioItem + WSJF inputs + computed WSJF
   model/ItemScore.java             the four stored WSJF inputs, keyed by item id
 src/main/resources/com/priolab/
+  img/priolab.png                  256x256 app icon (stage, jpackage, AppImage)
   fxml/wizard.fxml
   fxml/newproject.fxml
   fxml/connectorsettings.fxml

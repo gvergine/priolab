@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=PrioLab
+GenericName=Prioritizer
+Comment=Prioritize anything with WSJF scoring
+Exec=priolab %f
+Icon=priolab
+Terminal=false
+Categories=Office;ProjectManagement;
+StartupWMClass=com.priolab.App

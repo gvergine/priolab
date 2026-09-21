@@ -1,0 +1,5 @@
+#!/bin/sh
+# AppImage entry point: hand over to the jpackage launcher inside the image.
+HERE="$(dirname "$(readlink -f "$0")")"
+export APPDIR="${APPDIR:-$HERE}"
+exec "$HERE/usr/bin/priolab" "$@"

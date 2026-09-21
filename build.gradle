@@ -60,6 +60,7 @@ jlink {
 
     jpackage {
         imageName = 'priolab'
+        icon = 'src/main/resources/com/priolab/img/priolab.png'
         def currentOs = org.gradle.internal.os.OperatingSystem.current()
         if (currentOs.windows) {
             installerType = 'msi'
@@ -70,4 +71,99 @@ jlink {
         }
         installerName = 'priolab'
     }
+}
+
+// ---------------------------------------------------------------------------
+// AppImage: one double-clickable file, no installation. The user only has to
+// set the executable bit (chmod +x) and run it.
+//   ./gradlew appimage
+//     -> build/distributions/PrioLab-<version>-x86_64.AppImage
+//
+// It wraps the very same self-contained jpackage app image (app + JRE) used by
+// the .deb, so end users still don't need Java installed.
+// Set APPIMAGETOOL=/path/to/appimagetool to build offline with a local copy.
+// ---------------------------------------------------------------------------
+ext {
+    appImageArch = 'x86_64'
+    appImageToolUrl = "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${appImageArch}.AppImage"
+}
+
+def appImageToolCache = layout.buildDirectory.file("tools/appimagetool-${appImageArch}.AppImage")
+
+tasks.register('fetchAppImageTool') {
+    group = 'distribution'
+    description = 'Downloads appimagetool into build/tools (skipped when $APPIMAGETOOL is set).'
+    outputs.file(appImageToolCache)
+    outputs.upToDateWhen { System.getenv('APPIMAGETOOL') == null && appImageToolCache.get().asFile.exists() }
+    doLast {
+        def local = System.getenv('APPIMAGETOOL')
+        def target = appImageToolCache.get().asFile
+        target.parentFile.mkdirs()
+        if (local) {
+            copy { from local; into target.parentFile; rename { target.name } }
+        } else {
+            logger.lifecycle("Downloading ${appImageToolUrl}")
+            new java.net.URL(appImageToolUrl).withInputStream { input ->
+                target.withOutputStream { output -> output << input }
+            }
+        }
+        target.setExecutable(true)
+    }
+}
+
+tasks.register('appDir', Copy) {
+    group = 'distribution'
+    description = 'Assembles build/AppDir from the jpackage app image.'
+    dependsOn tasks.named('jpackageImage')
+
+    def appImage = layout.buildDirectory.dir("jpackage/priolab")
+    def appDirOut = layout.buildDirectory.dir('AppDir')
+    def appIcon = file('src/main/resources/com/priolab/img/priolab.png')
+    inputs.dir(appImage)
+    into appDirOut
+
+    // The jlink runtime ships read-only legal files, which cannot be copied
+    // over in place -- start from a clean AppDir every time.
+    doFirst { delete(appDirOut) }
+
+    // app + bundled JRE
+    from(appImage) { into 'usr' }
+    // AppImage entry point and the desktop entry / icon appimagetool looks for
+    from('packaging/appimage') {
+        include 'AppRun'
+        filePermissions { unix(0755) }
+    }
+    from('packaging/appimage') { include 'priolab.desktop' }
+    from('packaging/appimage') { include 'priolab.desktop'; into 'usr/share/applications' }
+    // the icon lives with the app resources (the JavaFX stage uses it too)
+    from(appIcon)
+    from(appIcon) { into 'usr/share/icons/hicolor/256x256/apps' }
+
+    doLast {
+        // .DirIcon is the thumbnail file managers show for the AppImage
+        def dir = destinationDir.toPath()
+        java.nio.file.Files.deleteIfExists(dir.resolve('.DirIcon'))
+        java.nio.file.Files.createSymbolicLink(dir.resolve('.DirIcon'), java.nio.file.Paths.get('priolab.png'))
+    }
+}
+
+tasks.register('appimage', Exec) {
+    group = 'distribution'
+    description = 'Builds a portable, no-install AppImage of PrioLab.'
+    dependsOn 'appDir', 'fetchAppImageTool'
+
+    def appDirPath = layout.buildDirectory.dir('AppDir')
+    def output = layout.buildDirectory.file("distributions/PrioLab-${version}-${appImageArch}.AppImage")
+    inputs.dir(appDirPath)
+    outputs.file(output)
+
+    doFirst { output.get().asFile.parentFile.mkdirs() }
+    environment 'ARCH', appImageArch
+    commandLine appImageToolCache.get().asFile.absolutePath,
+            '--appimage-extract-and-run', // works on hosts without FUSE installed
+            '--no-appstream',
+            appDirPath.get().asFile.absolutePath,
+            output.get().asFile.absolutePath
+
+    doLast { logger.lifecycle("AppImage: ${output.get().asFile}") }
 }

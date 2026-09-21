@@ -7,6 +7,7 @@ import javafx.application.Application;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
+import javafx.scene.image.Image;
 import javafx.stage.Stage;
 
 import java.io.IOException;
@@ -21,13 +22,30 @@ import java.io.UncheckedIOException;
  */
 public class App extends Application {
 
+    /** Classpath location of the window / launcher icon. */
+    private static final String ICON = "/com/priolab/img/priolab.png";
+
+    private static Image icon;
+
     private Stage stage;
     private final ConfigManager configManager = new ConfigManager();
+
+    /**
+     * Give {@code stage} the PrioLab icon. Used for the main window and for the
+     * modal dialogs, which get their own entry in the task bar.
+     */
+    public static void applyIcon(Stage stage) {
+        if (icon == null) {
+            icon = new Image(App.class.getResourceAsStream(ICON));
+        }
+        stage.getIcons().add(icon);
+    }
 
     @Override
     public void start(Stage stage) {
         this.stage = stage;
         stage.setTitle("PrioLab");
+        applyIcon(stage);
 
         if (configManager.configExists()) {
             configManager.load();
