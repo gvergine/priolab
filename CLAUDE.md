@@ -270,6 +270,14 @@ src/main/resources/com/priolab/
   declares its `requires java.sql` / `requires java.naming`. If you add another
   non-modular dependency and jlink fails, extend `forceMerge` / `mergedModule`
   similarly.
+- `mergedModule` must also declare
+  `provides 'java.sql.Driver' with 'org.sqlite.JDBC'`. `ServiceLoader` ignores
+  `META-INF/services` inside a *named* module, so without that clause the merged
+  module is never service-bound into the image's module graph and every
+  `DriverManager.getConnection("jdbc:sqlite:…")` in the jlink/jpackage/AppImage
+  build fails with *"No suitable driver found"* — while `./gradlew run`, which
+  runs off the classpath-ish dev module path, works fine. Any future
+  service-provider dependency needs the same treatment.
 
 ## Conventions
 

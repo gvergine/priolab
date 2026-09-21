@@ -52,6 +52,10 @@ jlink {
     mergedModule {
         requires 'java.sql'
         requires 'java.naming'
+        // A named module's META-INF/services is ignored: without this clause the
+        // image resolves no JDBC driver and DriverManager fails with
+        // "No suitable driver found for jdbc:sqlite:".
+        provides 'java.sql.Driver' with 'org.sqlite.JDBC'
     }
 
     launcher {
