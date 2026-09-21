@@ -2,39 +2,48 @@ package com.priolab.controller;
 
 import com.priolab.App;
 import com.priolab.config.ConfigManager;
+import com.priolab.connector.Connector;
 import com.priolab.connector.ConnectorManager;
-import com.priolab.db.Database;
+import com.priolab.doc.Document;
 import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
+import javafx.scene.control.ButtonType;
 import javafx.scene.control.Label;
+import javafx.scene.layout.StackPane;
 import javafx.stage.FileChooser;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
+import javafx.stage.WindowEvent;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.sql.SQLException;
+import java.util.List;
+import java.util.Optional;
 
 /**
- * Main window controller. The central work area is intentionally empty for now;
- * the menu exposes opening/saving a SQLite database.
+ * Main window controller. Owns the currently open {@link Document}, drives the
+ * File menu (new/open/save) and keeps the title/status in sync, prompting to
+ * save whenever unsaved edits would be lost.
  */
 public class MainController {
 
     @FXML
     private Label statusLabel;
+    @FXML
+    private StackPane contentPane;
 
     private App app;
     private ConfigManager configManager;
     private ConnectorManager connectorManager;
-    private final Database database = new Database();
+
+    private Document document;
 
     public void init(App app, ConfigManager configManager) {
         this.app = app;
@@ -47,6 +56,9 @@ public class MainController {
 
     @FXML
     private void onNewProject() {
+        if (!maybeSaveCurrent()) {
+            return;
+        }
         NewProjectController.Result result;
         try {
             FXMLLoader loader = new FXMLLoader(
@@ -79,8 +91,7 @@ public class MainController {
             if (parent != null) {
                 Files.createDirectories(parent);
             }
-            database.createProject(result.file(), result.name());
-            app.getStage().setTitle("PrioLab — " + result.name());
+            adoptDocument(Document.create(result.file(), result.name()));
             setStatus("Created project \"" + result.name() + "\" — "
                     + result.file().toAbsolutePath());
         } catch (Exception e) {
@@ -90,8 +101,11 @@ public class MainController {
 
     @FXML
     private void onOpen() {
+        if (!maybeSaveCurrent()) {
+            return;
+        }
         FileChooser chooser = new FileChooser();
-        chooser.setTitle("Open SQLite Database");
+        chooser.setTitle("Open Project");
         chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(
                 "SQLite Database", "*.sqlite3", "*.sqlite", "*.db"));
         File file = chooser.showOpenDialog(app.getStage());
@@ -99,37 +113,42 @@ public class MainController {
             return;
         }
         try {
-            database.open(file.toPath());
+            adoptDocument(Document.open(file.toPath()));
             setStatus("Opened: " + file.getAbsolutePath());
-        } catch (SQLException e) {
-            error("Failed to open database:\n" + e.getMessage());
+        } catch (Exception e) {
+            error("Failed to open project:\n" + e.getMessage());
         }
     }
 
     @FXML
     private void onSave() {
-        FileChooser chooser = new FileChooser();
-        chooser.setTitle("Save SQLite Database");
-        chooser.setInitialFileName("priolab.sqlite3");
-        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(
-                "SQLite Database", "*.sqlite3", "*.sqlite", "*.db"));
-        File file = chooser.showSaveDialog(app.getStage());
-        if (file == null) {
+        if (document == null) {
+            setStatus("Nothing to save — open or create a project first.");
             return;
         }
-        try {
-            // Opening a connection creates the file if it does not exist.
-            database.open(file.toPath());
-            setStatus("Saved: " + file.getAbsolutePath());
-        } catch (SQLException e) {
-            error("Failed to save database:\n" + e.getMessage());
-        }
+        saveCurrent();
     }
 
     @FXML
     private void onExit() {
-        database.close();
+        if (!maybeSaveCurrent()) {
+            return;
+        }
+        if (document != null) {
+            document.close();
+        }
         Platform.exit();
+    }
+
+    /** Wired as the window close handler; cancels the close on unsaved edits. */
+    public void handleCloseRequest(WindowEvent event) {
+        if (!maybeSaveCurrent()) {
+            event.consume();
+            return;
+        }
+        if (document != null) {
+            document.close();
+        }
     }
 
     @FXML
@@ -140,6 +159,96 @@ public class MainController {
         alert.setHeaderText("About PrioLab");
         alert.setTitle("About");
         alert.showAndWait();
+    }
+
+    /** Replace the current document with {@code next}, wiring up the editor. */
+    private void adoptDocument(Document next) {
+        if (document != null) {
+            document.close();
+        }
+        document = next;
+        try {
+            FXMLLoader loader = new FXMLLoader(
+                    getClass().getResource("/com/priolab/fxml/document.fxml"));
+            Parent root = loader.load();
+            DocumentController controller = loader.getController();
+            controller.init(document, connectorNames());
+            contentPane.getChildren().setAll(root);
+        } catch (IOException e) {
+            error("Failed to load the editor view:\n" + e.getMessage());
+            return;
+        }
+        document.dirtyProperty().addListener((obs, was, dirty) -> updateTitle());
+        updateTitle();
+    }
+
+    /** Persist the current document; returns true on success. */
+    private boolean saveCurrent() {
+        if (document == null) {
+            return true;
+        }
+        try {
+            document.save();
+            updateTitle();
+            setStatus("Saved: " + document.getPath().toAbsolutePath());
+            return true;
+        } catch (Exception e) {
+            error("Failed to save:\n" + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * If the current document has unsaved edits, ask what to do. Returns true if
+     * the caller may proceed (saved or discarded), false if the user cancelled.
+     */
+    private boolean maybeSaveCurrent() {
+        if (document == null || !document.isDirty()) {
+            return true;
+        }
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION,
+                "Save changes to \"" + displayName() + "\" before continuing?",
+                ButtonType.YES, ButtonType.NO, ButtonType.CANCEL);
+        alert.setHeaderText(null);
+        alert.setTitle("Unsaved Changes");
+        Optional<ButtonType> choice = alert.showAndWait();
+        if (choice.isEmpty() || choice.get() == ButtonType.CANCEL) {
+            return false;
+        }
+        if (choice.get() == ButtonType.YES) {
+            return saveCurrent();
+        }
+        return true; // NO -> discard
+    }
+
+    private List<String> connectorNames() {
+        try {
+            return connectorManager.discover().stream()
+                    .map(Connector::getName)
+                    .toList();
+        } catch (IOException e) {
+            error("Failed to list connectors:\n" + e.getMessage());
+            return List.of();
+        }
+    }
+
+    private String displayName() {
+        if (document == null) {
+            return "";
+        }
+        if (document.getName() != null && !document.getName().isBlank()) {
+            return document.getName();
+        }
+        return document.getPath().getFileName().toString();
+    }
+
+    private void updateTitle() {
+        if (document == null) {
+            app.getStage().setTitle("PrioLab");
+            return;
+        }
+        app.getStage().setTitle(
+                "PrioLab — " + displayName() + (document.isDirty() ? " *" : ""));
     }
 
     private void setStatus(String text) {

@@ -35,27 +35,44 @@ public class Database implements AutoCloseable {
      */
     public void createProject(Path path, String name) throws SQLException {
         open(path);
-        try (Statement st = connection.createStatement()) {
-            st.executeUpdate(
-                    "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)");
-        }
+        ensureSchema();
         putMeta("name", name);
         putMeta("schema_version", Integer.toString(SCHEMA_VERSION));
     }
 
+    /**
+     * Create the tables PrioLab relies on if they do not already exist. Called
+     * for freshly created projects and when opening an arbitrary SQLite file so
+     * it can be treated as a project.
+     */
+    public void ensureSchema() throws SQLException {
+        try (Statement st = connection.createStatement()) {
+            st.executeUpdate(
+                    "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)");
+        }
+    }
+
     /** Read the project name from the {@code meta} table, or {@code null}. */
     public String getProjectName() throws SQLException {
+        return getMeta("name");
+    }
+
+    /** Read a value from the {@code meta} table, or {@code null} if absent. */
+    public String getMeta(String key) throws SQLException {
         if (connection == null) {
             return null;
         }
         try (PreparedStatement ps = connection.prepareStatement(
-                "SELECT value FROM meta WHERE key = 'name'");
-             ResultSet rs = ps.executeQuery()) {
-            return rs.next() ? rs.getString(1) : null;
+                "SELECT value FROM meta WHERE key = ?")) {
+            ps.setString(1, key);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getString(1) : null;
+            }
         }
     }
 
-    private void putMeta(String key, String value) throws SQLException {
+    /** Insert or update a value in the {@code meta} table. */
+    public void putMeta(String key, String value) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
                 "INSERT INTO meta(key, value) VALUES(?, ?) "
                         + "ON CONFLICT(key) DO UPDATE SET value = excluded.value")) {

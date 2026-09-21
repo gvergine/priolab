@@ -21,7 +21,7 @@
                         <MenuItem text="New Project…" onAction="#onNewProject"/>
                         <SeparatorMenuItem/>
                         <MenuItem text="Open…" onAction="#onOpen"/>
-                        <MenuItem text="Save…" onAction="#onSave"/>
+                        <MenuItem text="Save" onAction="#onSave"/>
                         <SeparatorMenuItem/>
                         <MenuItem text="Exit" onAction="#onExit"/>
                     </items>
@@ -36,8 +36,8 @@
     </top>
 
     <center>
-        <StackPane styleClass="content">
-            <Label text="No workspace open. Use File ▸ Open… to load a .sqlite3 file."
+        <StackPane fx:id="contentPane" styleClass="content">
+            <Label text="No project open. Use File ▸ New Project… or File ▸ Open…"
                    styleClass="placeholder"/>
         </StackPane>
     </center>

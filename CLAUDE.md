@@ -65,18 +65,36 @@ executable files in the connectors directory (not started until first `send`).
 (also `.sqlite`, `.db`) file via `db/Database.java` (JDBC, `jdbc:sqlite:`). The
 driver is loaded through the JDBC `ServiceLoader`, so no explicit
 `requires org.xerial.sqlitejdbc` in `module-info` — only `requires java.sql`.
-**The main content area is intentionally empty for now**; wiring the DB and
-connectors into a real prioritization UI is the next step.
+`Database` also exposes a small `meta(key, value)` key/value table
+(`ensureSchema`, `getMeta`, `putMeta`) used to store project metadata.
 
 ### New Project
 `File ▸ New Project…` opens a small **modal** wizard (`newproject.fxml` /
 `NewProjectController`) that requires a **name** and a **file location**. On
 finish, `Database.createProject(path, name)` opens/creates the SQLite file and
-initialises a `meta(key, value)` table holding `name` and `schema_version`
+initialises the `meta` table with `name` and `schema_version`
 (`Database.SCHEMA_VERSION`). Unlike the first-run wizard (a scene swap), this
 one is a separate `Stage` shown with `showAndWait()`; the controller exposes the
-chosen name+path via `getResult()` (null = cancelled) and `MainController`
-performs the actual DB creation.
+chosen name+path via `getResult()` (null = cancelled).
+
+### Documents & editing
+An open project is a `doc/Document.java`: it owns the `Database`, holds the
+editable in-memory state, and tracks a JavaFX `dirty` property (in-memory value
+vs. what's on disk). `Document.create(file, name)` / `Document.open(file)` are
+the factories; `save()` writes back and clears dirty.
+
+`MainController` owns the current `Document` and hosts the editor view
+(`document.fxml` / `DocumentController`) inside the center `contentPane`.
+**For now the only editable field is the selected connector**: a `ComboBox` of
+the currently loaded connector names (from `ConnectorManager.discover()`),
+two-way bound to `Document.selectedConnectorProperty()` and persisted to
+`meta["connector"]` as a string.
+
+Unsaved-changes handling: `New Project`, `Open`, `Exit`, and the window's close
+button all route through `MainController.maybeSaveCurrent()` (Yes/No/Cancel);
+the window title shows `PrioLab — <name>` with a trailing `*` while dirty. The
+close button is wired via `stage.setOnCloseRequest(controller::handleCloseRequest)`
+in `App.showMain()`.
 
 ## Project layout
 
@@ -92,11 +110,16 @@ src/main/java/com/priolab/
   connector/ConnectorManager.java  discover connectors in the config'd dir
   connector/Protocol.java          command name constants
   controller/WizardController.java first-run wizard
-  controller/MainController.java   main window, File menu (SQLite open/save)
-  db/Database.java                 SQLite JDBC connection wrapper
+  controller/NewProjectController.java  modal "new project" wizard
+  controller/MainController.java   main window, File menu, current Document
+  controller/DocumentController.java    center editor (connector picker)
+  doc/Document.java                open project: DB + editable state + dirty
+  db/Database.java                 SQLite JDBC wrapper + meta key/value store
 src/main/resources/com/priolab/
   fxml/wizard.fxml
+  fxml/newproject.fxml
   fxml/main.fxml
+  fxml/document.fxml
   css/app.css
 ```
 

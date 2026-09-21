@@ -48,6 +48,8 @@ public class App extends Application {
     public void showMain() {
         MainController controller = swapScene("/com/priolab/fxml/main.fxml", 960, 640);
         controller.init(this, configManager);
+        // Route the window's close button through the same unsaved-changes guard.
+        stage.setOnCloseRequest(controller::handleCloseRequest);
     }
 
     private <T> T swapScene(String fxml, int width, int height) {
