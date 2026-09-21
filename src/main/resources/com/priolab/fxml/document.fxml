@@ -2,8 +2,8 @@
 
 <?import javafx.geometry.Insets?>
 <?import javafx.scene.control.Label?>
-<?import javafx.scene.control.ListView?>
 <?import javafx.scene.control.SplitPane?>
+<?import javafx.scene.control.TableView?>
 <?import javafx.scene.layout.VBox?>
 
 <SplitPane xmlns="http://javafx.com/javafx"
@@ -16,7 +16,7 @@
                 <Insets top="10" right="10" bottom="10" left="10"/>
             </padding>
             <Label text="To prioritize" styleClass="pane-title"/>
-            <ListView fx:id="leftList" VBox.vgrow="ALWAYS"/>
+            <TableView fx:id="leftTable" VBox.vgrow="ALWAYS"/>
         </VBox>
 
         <VBox styleClass="item-pane" spacing="6">
@@ -24,7 +24,7 @@
                 <Insets top="10" right="10" bottom="10" left="10"/>
             </padding>
             <Label text="Result" styleClass="pane-title"/>
-            <ListView fx:id="rightList" VBox.vgrow="ALWAYS"/>
+            <TableView fx:id="rightTable" VBox.vgrow="ALWAYS"/>
         </VBox>
     </items>
 </SplitPane>

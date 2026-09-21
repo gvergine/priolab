@@ -2,89 +2,254 @@ package com.priolab.controller;
 
 import com.priolab.doc.Document;
 import com.priolab.model.PrioItem;
+import com.priolab.model.ScoredItem;
 
 import javafx.application.HostServices;
+import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.ReadOnlyObjectWrapper;
+import javafx.beans.property.ReadOnlyStringWrapper;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
-import javafx.geometry.Pos;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Hyperlink;
-import javafx.scene.control.Label;
-import javafx.scene.control.ListCell;
-import javafx.scene.control.ListView;
-import javafx.scene.layout.HBox;
-import javafx.util.Callback;
+import javafx.scene.control.TableCell;
+import javafx.scene.control.TableColumn;
+import javafx.scene.control.TableView;
+import javafx.util.StringConverter;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.function.Function;
 
 /**
  * Controller for the central editing area (see {@code document.fxml}). The pane
- * is split in two: the left list holds the connector's items to prioritize, and
- * the right list will hold the prioritization result. For now both show the same
- * items; the prioritization interaction on the left (and its outcome on the
- * right) will be built out later.
+ * is split in two:
  *
- * <p>Each row renders the item {@code id} as a hyperlink that opens the item's
- * {@code url}, followed by its {@code description}.
+ * <ul>
+ *   <li><b>Left</b> — a sortable {@link TableView} of the connector's items with
+ *       the four WSJF inputs (Business Value, Time Criticality, Risk Reduction,
+ *       Job Size) editable per row via dropdowns, plus a computed WSJF column.</li>
+ *   <li><b>Right</b> — an unsortable table showing the same items ordered by WSJF
+ *       (highest first), with a 1-based Priority column.</li>
+ * </ul>
+ *
+ * Changing any score recomputes that item's WSJF and re-sorts the right table.
+ * Each row's {@code id} is a hyperlink that opens the item's {@code url}.
  */
 public class DocumentController {
 
+    /** The allowed non-"Undefined" scores (a modified Fibonacci scale). */
+    private static final List<Integer> SCORE_OPTIONS =
+            List.of(1, 2, 3, 5, 8, 13, 20, 40, 100);
+
+    /** Order the result list by WSJF descending, undefined (null) values last. */
+    private static final Comparator<ScoredItem> BY_WSJF_DESC = Comparator.comparing(
+            ScoredItem::getWsjf, Comparator.nullsLast(Comparator.reverseOrder()));
+
     @FXML
-    private ListView<PrioItem> leftList;
+    private TableView<ScoredItem> leftTable;
     @FXML
-    private ListView<PrioItem> rightList;
+    private TableView<ScoredItem> rightTable;
 
     private HostServices hostServices;
 
-    /** Bind the view to a document and prepare the item lists. */
+    /** The result table's backing list, kept sorted by WSJF. */
+    private final ObservableList<ScoredItem> rightItems = FXCollections.observableArrayList();
+
+    /** Bind the view to a document and build the two tables' columns. */
     public void init(Document document, HostServices hostServices) {
         this.hostServices = hostServices;
-        leftList.setCellFactory(itemCellFactory());
-        rightList.setCellFactory(itemCellFactory());
+        buildLeftTable();
+        buildRightTable();
+        rightTable.setItems(rightItems);
     }
 
-    /** Replace the items shown in both lists. */
+    /** Replace the items shown in both tables (fresh, unscored). */
     public void setItems(List<PrioItem> items) {
-        leftList.getItems().setAll(items);
-        rightList.getItems().setAll(items);
+        List<ScoredItem> scored = new ArrayList<>(items.size());
+        for (PrioItem item : items) {
+            ScoredItem si = new ScoredItem(item);
+            // Re-sort the result table whenever this item's WSJF changes.
+            si.wsjfProperty().addListener((obs, oldVal, newVal) -> resortRight());
+            scored.add(si);
+        }
+        leftTable.getItems().setAll(scored);
+        rightItems.setAll(scored);
+        resortRight();
     }
 
-    private Callback<ListView<PrioItem>, ListCell<PrioItem>> itemCellFactory() {
-        return list -> new ItemCell(hostServices);
+    // --- Table construction --------------------------------------------------
+
+    private void buildLeftTable() {
+        leftTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        leftTable.getColumns().setAll(List.of(
+                idColumn(),
+                descriptionColumn(),
+                scoreColumn("Business Value", ScoredItem::businessValueProperty),
+                scoreColumn("Time Criticality", ScoredItem::timeCriticalityProperty),
+                scoreColumn("Risk Reduction", ScoredItem::riskReductionProperty),
+                scoreColumn("Job Size", ScoredItem::jobSizeProperty),
+                wsjfColumn()));
     }
 
-    /** Renders an item as a clickable id (opens its url) plus its description. */
-    private static final class ItemCell extends ListCell<PrioItem> {
+    private void buildRightTable() {
+        rightTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+
+        TableColumn<ScoredItem, Void> priority = new TableColumn<>("Priority");
+        priority.setSortable(false);
+        priority.setPrefWidth(60);
+        priority.setCellFactory(col -> new TableCell<>() {
+            @Override
+            protected void updateItem(Void value, boolean empty) {
+                super.updateItem(value, empty);
+                boolean noRow = getTableRow() == null || getTableRow().getItem() == null;
+                setText(empty || noRow ? null : String.valueOf(getIndex() + 1));
+            }
+        });
+
+        TableColumn<ScoredItem, Double> wsjf = wsjfColumn();
+        wsjf.setSortable(false);
+
+        TableColumn<ScoredItem, ScoredItem> id = idColumn();
+        id.setSortable(false);
+
+        TableColumn<ScoredItem, String> description = descriptionColumn();
+        description.setSortable(false);
+
+        rightTable.getColumns().setAll(List.of(priority, wsjf, id, description));
+    }
+
+    private void resortRight() {
+        FXCollections.sort(rightItems, BY_WSJF_DESC);
+        // Priority cells are index-based, so refresh after reordering.
+        rightTable.refresh();
+    }
+
+    // --- Column factories ----------------------------------------------------
+
+    private TableColumn<ScoredItem, ScoredItem> idColumn() {
+        TableColumn<ScoredItem, ScoredItem> col = new TableColumn<>("ID");
+        col.setPrefWidth(90);
+        col.setCellValueFactory(cd -> new ReadOnlyObjectWrapper<>(cd.getValue()));
+        col.setComparator(Comparator.comparing(
+                si -> si.item().id(), Comparator.nullsFirst(Comparator.naturalOrder())));
+        col.setCellFactory(c -> new IdCell(hostServices));
+        return col;
+    }
+
+    private TableColumn<ScoredItem, String> descriptionColumn() {
+        TableColumn<ScoredItem, String> col = new TableColumn<>("Description");
+        col.setPrefWidth(220);
+        col.setCellValueFactory(cd ->
+                new ReadOnlyStringWrapper(cd.getValue().item().description()));
+        return col;
+    }
+
+    private TableColumn<ScoredItem, Double> wsjfColumn() {
+        TableColumn<ScoredItem, Double> col = new TableColumn<>("WSJF");
+        col.setPrefWidth(70);
+        col.setCellValueFactory(cd -> cd.getValue().wsjfProperty());
+        col.setCellFactory(c -> new TableCell<>() {
+            @Override
+            protected void updateItem(Double value, boolean empty) {
+                super.updateItem(value, empty);
+                setText(empty || value == null ? null : String.format("%.2f", value));
+            }
+        });
+        return col;
+    }
+
+    private TableColumn<ScoredItem, Integer> scoreColumn(
+            String title, Function<ScoredItem, ObjectProperty<Integer>> extractor) {
+        TableColumn<ScoredItem, Integer> col = new TableColumn<>(title);
+        col.setPrefWidth(120);
+        col.setCellValueFactory(cd -> extractor.apply(cd.getValue()));
+        col.setCellFactory(c -> new ScoreCell(extractor));
+        return col;
+    }
+
+    // --- Cells ---------------------------------------------------------------
+
+    /** A clickable {@code id} that opens the item's {@code url}. */
+    private static final class IdCell extends TableCell<ScoredItem, ScoredItem> {
 
         private final HostServices hostServices;
-        private final Hyperlink idLink = new Hyperlink();
-        private final Label description = new Label();
-        private final HBox box = new HBox(8, idLink, description);
+        private final Hyperlink link = new Hyperlink();
+        private ScoredItem current;
 
-        private PrioItem current;
-
-        ItemCell(HostServices hostServices) {
+        IdCell(HostServices hostServices) {
             this.hostServices = hostServices;
-            box.setAlignment(Pos.CENTER_LEFT);
-            idLink.setOnAction(e -> {
-                if (current != null && current.url() != null && !current.url().isBlank()
-                        && hostServices != null) {
-                    hostServices.showDocument(current.url());
+            link.setOnAction(e -> {
+                if (current != null && hostServices != null) {
+                    String url = current.item().url();
+                    if (url != null && !url.isBlank()) {
+                        hostServices.showDocument(url);
+                    }
                 }
             });
         }
 
         @Override
-        protected void updateItem(PrioItem item, boolean empty) {
-            super.updateItem(item, empty);
-            current = item;
-            if (empty || item == null) {
-                setText(null);
+        protected void updateItem(ScoredItem value, boolean empty) {
+            super.updateItem(value, empty);
+            current = value;
+            if (empty || value == null) {
                 setGraphic(null);
                 return;
             }
-            idLink.setText(item.id() == null || item.id().isBlank() ? "(no id)" : item.id());
-            idLink.setDisable(item.url() == null || item.url().isBlank());
-            description.setText(item.description() == null ? "" : item.description());
-            setGraphic(box);
+            String id = value.item().id();
+            link.setText(id == null || id.isBlank() ? "(no id)" : id);
+            String url = value.item().url();
+            link.setDisable(url == null || url.isBlank());
+            setGraphic(link);
+        }
+    }
+
+    /** A dropdown of "Undefined" (null) plus the score options. */
+    private final class ScoreCell extends TableCell<ScoredItem, Integer> {
+
+        private final ComboBox<Integer> combo = new ComboBox<>();
+        private final Function<ScoredItem, ObjectProperty<Integer>> extractor;
+        private ScoredItem current;
+        private boolean updating;
+
+        ScoreCell(Function<ScoredItem, ObjectProperty<Integer>> extractor) {
+            this.extractor = extractor;
+            combo.setMaxWidth(Double.MAX_VALUE);
+            combo.getItems().add(null); // "Undefined"
+            combo.getItems().addAll(SCORE_OPTIONS);
+            combo.setConverter(new StringConverter<>() {
+                @Override
+                public String toString(Integer value) {
+                    return value == null ? "Undefined" : value.toString();
+                }
+
+                @Override
+                public Integer fromString(String text) {
+                    return text == null || "Undefined".equals(text) ? null : Integer.valueOf(text);
+                }
+            });
+            combo.valueProperty().addListener((obs, oldVal, newVal) -> {
+                if (!updating && current != null) {
+                    extractor.apply(current).set(newVal);
+                }
+            });
+        }
+
+        @Override
+        protected void updateItem(Integer value, boolean empty) {
+            super.updateItem(value, empty);
+            current = getTableRow() == null ? null : getTableRow().getItem();
+            if (empty || current == null) {
+                setGraphic(null);
+                return;
+            }
+            updating = true;
+            combo.setValue(value);
+            updating = false;
+            setGraphic(combo);
         }
     }
 }

@@ -143,12 +143,28 @@ the factories; `save()` writes back and clears dirty.
 The whole connector bar is disabled until a project is open.
 
 **Center view** (`DocumentController`) is a **horizontal `SplitPane`** of two
-`ListView<PrioItem>`s. The **left** list holds the connector's items to
-prioritize; the **right** list will show the prioritization *result*. For now
-both show the same items — the plan is to let the user prioritize on the left
-and see the outcome on the right. Each row renders the item `id` as a
-`Hyperlink` (opens `url` via `HostServices.showDocument`) followed by its
-`description`.
+`TableView`s over `model/ScoredItem.java` (a `PrioItem` plus editable WSJF
+scoring state). Each row's `id` is a `Hyperlink` that opens the item's `url` via
+`HostServices.showDocument`.
+
+- **Left table** (sortable by any column) has: **ID**, **Description**, the four
+  WSJF inputs — **Business Value**, **Time Criticality**, **Risk Reduction**,
+  **Job Size** — each an in-cell `ComboBox` of *Undefined* (default, = `null`)
+  or a modified-Fibonacci number (`1, 2, 3, 5, 8, 13, 20, 40, 100`), and a
+  computed **WSJF** column.
+- **WSJF** = `(BusinessValue + TimeCriticality + RiskReduction) / JobSize`,
+  formatted to two decimals; **blank while any of the four inputs is Undefined**.
+  It is a `Bindings.createObjectBinding` on `ScoredItem` (nullable `Double`) that
+  recomputes as inputs change.
+- **Right table** (unsortable) has **Priority**, **WSJF**, **ID**, **Description**.
+  It shows the same `ScoredItem` instances ordered by **WSJF descending**
+  (Undefined last); **Priority** is the 1-based row position. `DocumentController`
+  listens to each item's `wsjfProperty()` and re-sorts the right table's backing
+  list (`FXCollections.sort` + `refresh()`) on every change, so editing a score
+  on the left instantly reorders the result on the right.
+
+Scores are in-memory only for now (not persisted); a fresh run rebuilds unscored
+items.
 
 Unsaved-changes handling: `New Project`, `Open`, `Exit`, and the window's close
 button all route through `MainController.maybeSaveCurrent()` (Yes/No/Cancel);
@@ -174,10 +190,11 @@ src/main/java/com/priolab/
   controller/NewProjectController.java  modal "new project" wizard
   controller/ConnectorSettingsController.java  modal connector-key editor
   controller/MainController.java   main window, top bar, run protocol, current Document
-  controller/DocumentController.java    center split view: two item lists
+  controller/DocumentController.java    center split view: WSJF scoring + result tables
   doc/Document.java                open project: DB + editable state + dirty
   db/Database.java                 SQLite JDBC wrapper + meta / connector_settings
   model/PrioItem.java              one item to prioritize (id/description/url)
+  model/ScoredItem.java            PrioItem + WSJF inputs + computed WSJF
 src/main/resources/com/priolab/
   fxml/wizard.fxml
   fxml/newproject.fxml
