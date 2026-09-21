@@ -18,6 +18,8 @@
             <menus>
                 <Menu text="File">
                     <items>
+                        <MenuItem text="New Project…" onAction="#onNewProject"/>
+                        <SeparatorMenuItem/>
                         <MenuItem text="Open…" onAction="#onOpen"/>
                         <MenuItem text="Save…" onAction="#onSave"/>
                         <SeparatorMenuItem/>

@@ -6,11 +6,19 @@ import com.priolab.connector.ConnectorManager;
 import com.priolab.db.Database;
 import javafx.application.Platform;
 import javafx.fxml.FXML;
+import javafx.fxml.FXMLLoader;
+import javafx.scene.Parent;
+import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Label;
 import javafx.stage.FileChooser;
+import javafx.stage.Modality;
+import javafx.stage.Stage;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.SQLException;
 
@@ -35,6 +43,49 @@ public class MainController {
         this.connectorManager = new ConnectorManager(
                 connectorsDir == null ? null : Paths.get(connectorsDir));
         setStatus("Ready — connectors: " + connectorsDir);
+    }
+
+    @FXML
+    private void onNewProject() {
+        NewProjectController.Result result;
+        try {
+            FXMLLoader loader = new FXMLLoader(
+                    getClass().getResource("/com/priolab/fxml/newproject.fxml"));
+            Parent root = loader.load();
+            NewProjectController controller = loader.getController();
+
+            Stage dialog = new Stage();
+            dialog.initOwner(app.getStage());
+            dialog.initModality(Modality.APPLICATION_MODAL);
+            dialog.setTitle("New Project");
+            Scene scene = new Scene(root, 480, 300);
+            scene.getStylesheets().add(
+                    getClass().getResource("/com/priolab/css/app.css").toExternalForm());
+            dialog.setScene(scene);
+            controller.setStage(dialog);
+            dialog.showAndWait();
+
+            result = controller.getResult();
+        } catch (IOException e) {
+            error("Failed to open the New Project dialog:\n" + e.getMessage());
+            return;
+        }
+        if (result == null) {
+            return; // cancelled
+        }
+
+        try {
+            Path parent = result.file().getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            database.createProject(result.file(), result.name());
+            app.getStage().setTitle("PrioLab — " + result.name());
+            setStatus("Created project \"" + result.name() + "\" — "
+                    + result.file().toAbsolutePath());
+        } catch (Exception e) {
+            error("Failed to create project:\n" + e.getMessage());
+        }
     }
 
     @FXML

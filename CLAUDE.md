@@ -68,6 +68,16 @@ driver is loaded through the JDBC `ServiceLoader`, so no explicit
 **The main content area is intentionally empty for now**; wiring the DB and
 connectors into a real prioritization UI is the next step.
 
+### New Project
+`File ▸ New Project…` opens a small **modal** wizard (`newproject.fxml` /
+`NewProjectController`) that requires a **name** and a **file location**. On
+finish, `Database.createProject(path, name)` opens/creates the SQLite file and
+initialises a `meta(key, value)` table holding `name` and `schema_version`
+(`Database.SCHEMA_VERSION`). Unlike the first-run wizard (a scene swap), this
+one is a separate `Stage` shown with `showAndWait()`; the controller exposes the
+chosen name+path via `getResult()` (null = cancelled) and `MainController`
+performs the actual DB creation.
+
 ## Project layout
 
 ```
