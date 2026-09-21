@@ -20,6 +20,7 @@ import javafx.beans.value.ObservableValue;
 public class ScoredItem {
 
     private final PrioItem item;
+    private final int order;
 
     private final ObjectProperty<Integer> businessValue = new SimpleObjectProperty<>(null);
     private final ObjectProperty<Integer> timeCriticality = new SimpleObjectProperty<>(null);
@@ -28,8 +29,9 @@ public class ScoredItem {
 
     private final ObservableValue<Double> wsjf;
 
-    public ScoredItem(PrioItem item) {
+    public ScoredItem(PrioItem item, int order) {
         this.item = item;
+        this.order = order;
         this.wsjf = Bindings.createObjectBinding(() -> {
             Integer bv = businessValue.get();
             Integer tc = timeCriticality.get();
@@ -44,6 +46,11 @@ public class ScoredItem {
 
     public PrioItem item() {
         return item;
+    }
+
+    /** 1-based position in which the connector emitted this item. */
+    public int order() {
+        return order;
     }
 
     public ObjectProperty<Integer> businessValueProperty() {

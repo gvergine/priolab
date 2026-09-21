@@ -50,6 +50,11 @@
     -fx-text-fill: #444444;
 }
 
+/* Rows in the left table that are not fully scored yet. */
+.table-row-cell:incomplete {
+    -fx-background: #fffbcc;
+}
+
 /* Top bar: menu + connector selector */
 .topbar {
     -fx-background-color: #f0f0f0;

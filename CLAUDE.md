@@ -147,11 +147,14 @@ The whole connector bar is disabled until a project is open.
 scoring state). Each row's `id` is a `Hyperlink` that opens the item's `url` via
 `HostServices.showDocument`.
 
-- **Left table** (sortable by any column) has: **ID**, **Description**, the four
-  WSJF inputs — **Business Value**, **Time Criticality**, **Risk Reduction**,
-  **Job Size** — each an in-cell `ComboBox` of *Undefined* (default, = `null`)
-  or a modified-Fibonacci number (`1, 2, 3, 5, 8, 13, 20, 40, 100`), and a
-  computed **WSJF** column.
+- **Left table** has: **Order** (1-based, the sequence in which the connector
+  emitted the item — stored on `ScoredItem`), **ID**, **Description**, the four
+  WSJF inputs — **UBV**, **TC**, **RR/RO**, **Size** — each an in-cell `ComboBox`
+  of *blank* (default, = `null`) or a modified-Fibonacci number
+  (`1, 2, 3, 5, 8, 13, 20, 40, 100`), and a computed **WSJF** column. Only
+  **Order** and **ID** (the "key") are sortable; the other columns are fixed.
+  Rows that are not fully scored (WSJF still blank) are highlighted **light
+  yellow** via the `:incomplete` pseudo-class (see `app.css`).
 - **WSJF** = `(BusinessValue + TimeCriticality + RiskReduction) / JobSize`,
   formatted to two decimals; **blank while any of the four inputs is Undefined**.
   It is a `Bindings.createObjectBinding` on `ScoredItem` (nullable `Double`) that

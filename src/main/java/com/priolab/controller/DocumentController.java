@@ -8,13 +8,16 @@ import javafx.application.HostServices;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.ReadOnlyObjectWrapper;
 import javafx.beans.property.ReadOnlyStringWrapper;
+import javafx.beans.value.ChangeListener;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
+import javafx.css.PseudoClass;
 import javafx.fxml.FXML;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Hyperlink;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
+import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
 import javafx.util.StringConverter;
 
@@ -48,6 +51,9 @@ public class DocumentController {
     private static final Comparator<ScoredItem> BY_WSJF_DESC = Comparator.comparing(
             ScoredItem::getWsjf, Comparator.nullsLast(Comparator.reverseOrder()));
 
+    /** Set on left-table rows that are not yet fully scored (see app.css). */
+    private static final PseudoClass INCOMPLETE = PseudoClass.getPseudoClass("incomplete");
+
     @FXML
     private TableView<ScoredItem> leftTable;
     @FXML
@@ -69,8 +75,9 @@ public class DocumentController {
     /** Replace the items shown in both tables (fresh, unscored). */
     public void setItems(List<PrioItem> items) {
         List<ScoredItem> scored = new ArrayList<>(items.size());
+        int order = 1;
         for (PrioItem item : items) {
-            ScoredItem si = new ScoredItem(item);
+            ScoredItem si = new ScoredItem(item, order++);
             // Re-sort the result table whenever this item's WSJF changes.
             si.wsjfProperty().addListener((obs, oldVal, newVal) -> resortRight());
             scored.add(si);
@@ -84,14 +91,35 @@ public class DocumentController {
 
     private void buildLeftTable() {
         leftTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        // Light-yellow highlight for any row that is not fully scored yet.
+        leftTable.setRowFactory(tv -> new ScoredRow());
+
+        // Only Order and the id (the "key") are sortable; the rest are fixed.
+        TableColumn<ScoredItem, String> description = descriptionColumn();
+        description.setSortable(false);
+
         leftTable.getColumns().setAll(List.of(
+                orderColumn(),
                 idColumn(),
-                descriptionColumn(),
-                scoreColumn("Business Value", ScoredItem::businessValueProperty),
-                scoreColumn("Time Criticality", ScoredItem::timeCriticalityProperty),
-                scoreColumn("Risk Reduction", ScoredItem::riskReductionProperty),
-                scoreColumn("Job Size", ScoredItem::jobSizeProperty),
-                wsjfColumn()));
+                description,
+                scoreColumn("UBV", ScoredItem::businessValueProperty),
+                scoreColumn("TC", ScoredItem::timeCriticalityProperty),
+                scoreColumn("RR/RO", ScoredItem::riskReductionProperty),
+                scoreColumn("Size", ScoredItem::jobSizeProperty),
+                leftWsjfColumn()));
+    }
+
+    private TableColumn<ScoredItem, Integer> orderColumn() {
+        TableColumn<ScoredItem, Integer> col = new TableColumn<>("Order");
+        col.setPrefWidth(55);
+        col.setCellValueFactory(cd -> new ReadOnlyObjectWrapper<>(cd.getValue().order()));
+        return col;
+    }
+
+    private TableColumn<ScoredItem, Double> leftWsjfColumn() {
+        TableColumn<ScoredItem, Double> col = wsjfColumn();
+        col.setSortable(false);
+        return col;
     }
 
     private void buildRightTable() {
@@ -164,7 +192,8 @@ public class DocumentController {
     private TableColumn<ScoredItem, Integer> scoreColumn(
             String title, Function<ScoredItem, ObjectProperty<Integer>> extractor) {
         TableColumn<ScoredItem, Integer> col = new TableColumn<>(title);
-        col.setPrefWidth(120);
+        col.setPrefWidth(90);
+        col.setSortable(false);
         col.setCellValueFactory(cd -> extractor.apply(cd.getValue()));
         col.setCellFactory(c -> new ScoreCell(extractor));
         return col;
@@ -207,7 +236,34 @@ public class DocumentController {
         }
     }
 
-    /** A dropdown of "Undefined" (null) plus the score options. */
+    /** A left-table row highlighted while its item is not fully scored. */
+    private static final class ScoredRow extends TableRow<ScoredItem> {
+
+        private final ChangeListener<Double> wsjfListener = (obs, oldVal, newVal) -> refreshStyle();
+        private ScoredItem bound;
+
+        @Override
+        protected void updateItem(ScoredItem item, boolean empty) {
+            super.updateItem(item, empty);
+            if (bound != null) {
+                bound.wsjfProperty().removeListener(wsjfListener);
+                bound = null;
+            }
+            if (empty || item == null) {
+                pseudoClassStateChanged(INCOMPLETE, false);
+                return;
+            }
+            bound = item;
+            item.wsjfProperty().addListener(wsjfListener);
+            refreshStyle();
+        }
+
+        private void refreshStyle() {
+            pseudoClassStateChanged(INCOMPLETE, getItem() == null || getItem().getWsjf() == null);
+        }
+    }
+
+    /** A dropdown of blank (null) plus the score options. */
     private final class ScoreCell extends TableCell<ScoredItem, Integer> {
 
         private final ComboBox<Integer> combo = new ComboBox<>();
@@ -223,12 +279,12 @@ public class DocumentController {
             combo.setConverter(new StringConverter<>() {
                 @Override
                 public String toString(Integer value) {
-                    return value == null ? "Undefined" : value.toString();
+                    return value == null ? "" : value.toString();
                 }
 
                 @Override
                 public Integer fromString(String text) {
-                    return text == null || "Undefined".equals(text) ? null : Integer.valueOf(text);
+                    return text == null || text.isBlank() ? null : Integer.valueOf(text);
                 }
             });
             combo.valueProperty().addListener((obs, oldVal, newVal) -> {

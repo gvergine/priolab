@@ -35,18 +35,54 @@
     -fx-border-width: 1 0 0 0;
 }
 
-/* Document editor */
+/* Document editor: split lists of items */
 .document {
     -fx-background-color: #fafafa;
 }
 
-.document .section-title {
+.item-pane {
+    -fx-background-color: #fafafa;
+}
+
+.pane-title {
+    -fx-font-size: 14px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #444444;
+}
+
+/* Rows in the left table that are not fully scored yet. */
+.table-row-cell:incomplete {
+    -fx-background: #fffbcc;
+}
+
+/* Top bar: menu + connector selector */
+.topbar {
+    -fx-background-color: #f0f0f0;
+    -fx-border-color: #dddddd;
+    -fx-border-width: 0 0 1 0;
+}
+
+.connector-bar .label {
+    -fx-text-fill: #444444;
+}
+
+.icon-button {
+    -fx-font-size: 14px;
+    -fx-padding: 2 8 2 8;
+}
+
+/* Connector settings dialog */
+.dialog .section-title {
     -fx-font-size: 16px;
     -fx-font-weight: bold;
 }
 
-.document .subtitle {
+.dialog .subtitle {
     -fx-text-fill: #555555;
+}
+
+.settings-scroll {
+    -fx-background-color: transparent;
 }
 
 /* Console / log pane */

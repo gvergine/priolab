@@ -1,23 +1,30 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <?import javafx.geometry.Insets?>
-<?import javafx.scene.control.ComboBox?>
 <?import javafx.scene.control.Label?>
+<?import javafx.scene.control.SplitPane?>
+<?import javafx.scene.control.TableView?>
 <?import javafx.scene.layout.VBox?>
 
-<VBox xmlns="http://javafx.com/javafx"
-      xmlns:fx="http://javafx.com/fxml"
-      fx:controller="com.priolab.controller.DocumentController"
-      spacing="12" styleClass="document">
-    <padding>
-        <Insets top="24" right="24" bottom="24" left="24"/>
-    </padding>
+<SplitPane xmlns="http://javafx.com/javafx"
+           xmlns:fx="http://javafx.com/fxml"
+           fx:controller="com.priolab.controller.DocumentController"
+           orientation="HORIZONTAL" dividerPositions="0.5" styleClass="document">
+    <items>
+        <VBox styleClass="item-pane" spacing="6">
+            <padding>
+                <Insets top="10" right="10" bottom="10" left="10"/>
+            </padding>
+            <Label text="To prioritize" styleClass="pane-title"/>
+            <TableView fx:id="leftTable" VBox.vgrow="ALWAYS"/>
+        </VBox>
 
-    <Label text="Connector" styleClass="section-title"/>
-    <Label styleClass="subtitle" wrapText="true"
-           text="Choose the connector this project uses. The selection is saved into the project file."/>
-
-    <ComboBox fx:id="connectorCombo" prefWidth="320"/>
-    <Label fx:id="emptyHint" styleClass="placeholder" wrapText="true" visible="false" managed="false"
-           text="No connectors found in the connectors directory."/>
-</VBox>
+        <VBox styleClass="item-pane" spacing="6">
+            <padding>
+                <Insets top="10" right="10" bottom="10" left="10"/>
+            </padding>
+            <Label text="Result" styleClass="pane-title"/>
+            <TableView fx:id="rightTable" VBox.vgrow="ALWAYS"/>
+        </VBox>
+    </items>
+</SplitPane>
