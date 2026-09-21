@@ -14,8 +14,11 @@ import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.TextArea;
+import javafx.scene.layout.HBox;
 import javafx.scene.layout.StackPane;
 import javafx.stage.FileChooser;
 import javafx.stage.Modality;
@@ -46,6 +49,14 @@ public class MainController {
     private TextArea logArea;
     @FXML
     private Button runButton;
+    @FXML
+    private Button connectorSettingsButton;
+    @FXML
+    private ProgressIndicator runProgress;
+    @FXML
+    private HBox connectorBar;
+    @FXML
+    private ComboBox<String> connectorCombo;
 
     private App app;
     private ConfigManager configManager;
@@ -217,10 +228,10 @@ public class MainController {
                     code -> Platform.runLater(() -> {
                         appendLog("[exited with code " + code + "]");
                         runningConnector = null;
-                        runButton.setDisable(false);
+                        setRunning(false);
                     }));
             runningConnector = connector;
-            runButton.setDisable(true);
+            setRunning(true);
             setStatus("Running connector: " + name);
             // Hand the connector its per-project settings straight away.
             appendLog("> " + initLine);
@@ -240,6 +251,18 @@ public class MainController {
         return sb.toString();
     }
 
+    /**
+     * Reflect the connector run state in the UI: while running, disable the
+     * connector inputs and show the spinning indeterminate progress indicator.
+     */
+    private void setRunning(boolean running) {
+        runButton.setDisable(running);
+        connectorCombo.setDisable(running);
+        connectorSettingsButton.setDisable(running);
+        runProgress.setVisible(running);
+        runProgress.setManaged(running);
+    }
+
     /** Write a line to the connector's stdin, surfacing any failure in the log. */
     private void sendLine(Connector connector, String line) {
         try {
@@ -252,6 +275,45 @@ public class MainController {
     @FXML
     private void onClearLog() {
         logArea.clear();
+    }
+
+    /** Open the modal dialog to edit the selected connector's setting values. */
+    @FXML
+    private void onConnectorSettings() {
+        if (document == null) {
+            return;
+        }
+        String name = connectorCombo.getValue();
+        if (name == null || name.isBlank()) {
+            setStatus("Select a connector to configure.");
+            return;
+        }
+        Connector connector = findConnector(name);
+        if (connector == null) {
+            error("Connector not found: " + name
+                    + "\nIt may have been removed or its manifest is invalid.");
+            return;
+        }
+        try {
+            FXMLLoader loader = new FXMLLoader(getClass().getResource(
+                    "/com/priolab/fxml/connectorsettings.fxml"));
+            Parent root = loader.load();
+            ConnectorSettingsController controller = loader.getController();
+
+            Stage dialog = new Stage();
+            dialog.initOwner(app.getStage());
+            dialog.initModality(Modality.APPLICATION_MODAL);
+            dialog.setTitle("Connector Settings");
+            Scene scene = new Scene(root, 420, 380);
+            scene.getStylesheets().add(
+                    getClass().getResource("/com/priolab/css/app.css").toExternalForm());
+            dialog.setScene(scene);
+            controller.setStage(dialog);
+            controller.init(document, connector);
+            dialog.showAndWait();
+        } catch (IOException e) {
+            error("Failed to open connector settings:\n" + e.getMessage());
+        }
     }
 
     private Connector findConnector(String name) {
@@ -275,6 +337,8 @@ public class MainController {
     /** Replace the current document with {@code next}, wiring up the editor. */
     private void adoptDocument(Document next) {
         if (document != null) {
+            connectorCombo.valueProperty().unbindBidirectional(
+                    document.selectedConnectorProperty());
             document.close();
         }
         document = next;
@@ -283,12 +347,19 @@ public class MainController {
                     getClass().getResource("/com/priolab/fxml/document.fxml"));
             Parent root = loader.load();
             DocumentController controller = loader.getController();
-            controller.init(document, connectors());
+            controller.init(document);
             contentPane.getChildren().setAll(root);
         } catch (IOException e) {
             error("Failed to load the editor view:\n" + e.getMessage());
             return;
         }
+
+        // Populate and bind the connector selector in the top bar.
+        connectorCombo.getItems().setAll(connectorNames());
+        connectorCombo.valueProperty().bindBidirectional(
+                document.selectedConnectorProperty());
+        connectorBar.setDisable(false);
+
         document.dirtyProperty().addListener((obs, was, dirty) -> updateTitle());
         updateTitle();
     }
@@ -330,6 +401,10 @@ public class MainController {
             return saveCurrent();
         }
         return true; // NO -> discard
+    }
+
+    private List<String> connectorNames() {
+        return connectors().stream().map(Connector::getName).toList();
     }
 
     private List<Connector> connectors() {

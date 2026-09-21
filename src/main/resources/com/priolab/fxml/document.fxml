@@ -1,26 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <?import javafx.geometry.Insets?>
-<?import javafx.scene.control.ComboBox?>
 <?import javafx.scene.control.Label?>
 <?import javafx.scene.layout.VBox?>
 
 <VBox xmlns="http://javafx.com/javafx"
       xmlns:fx="http://javafx.com/fxml"
       fx:controller="com.priolab.controller.DocumentController"
-      spacing="12" styleClass="document">
+      spacing="8" styleClass="document">
     <padding>
         <Insets top="24" right="24" bottom="24" left="24"/>
     </padding>
 
-    <Label text="Connector" styleClass="section-title"/>
+    <Label fx:id="nameLabel" styleClass="section-title"/>
     <Label styleClass="subtitle" wrapText="true"
-           text="Choose the connector this project uses. The selection is saved into the project file."/>
+           text="Pick the connector for this project from the selector in the toolbar, then use the ⚙ button to configure its settings."/>
 
-    <ComboBox fx:id="connectorCombo" prefWidth="320"/>
-    <Label fx:id="emptyHint" styleClass="placeholder" wrapText="true" visible="false" managed="false"
-           text="No connectors found in the connectors directory."/>
-
-    <Label fx:id="keysTitle" text="Settings" styleClass="section-title" visible="false" managed="false"/>
-    <VBox fx:id="keysBox" spacing="8"/>
+    <Label fx:id="connectorLabel" styleClass="subtitle"/>
 </VBox>

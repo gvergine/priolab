@@ -2,10 +2,12 @@
 
 <?import javafx.geometry.Insets?>
 <?import javafx.scene.control.Button?>
+<?import javafx.scene.control.ComboBox?>
 <?import javafx.scene.control.Label?>
 <?import javafx.scene.control.Menu?>
 <?import javafx.scene.control.MenuBar?>
 <?import javafx.scene.control.MenuItem?>
+<?import javafx.scene.control.ProgressIndicator?>
 <?import javafx.scene.control.SeparatorMenuItem?>
 <?import javafx.scene.control.SplitPane?>
 <?import javafx.scene.control.TextArea?>
@@ -19,25 +21,43 @@
             fx:controller="com.priolab.controller.MainController"
             styleClass="main">
     <top>
-        <MenuBar>
-            <menus>
-                <Menu text="File">
-                    <items>
-                        <MenuItem text="New Project…" onAction="#onNewProject"/>
-                        <SeparatorMenuItem/>
-                        <MenuItem text="Open…" onAction="#onOpen"/>
-                        <MenuItem text="Save" onAction="#onSave"/>
-                        <SeparatorMenuItem/>
-                        <MenuItem text="Exit" onAction="#onExit"/>
-                    </items>
-                </Menu>
-                <Menu text="Help">
-                    <items>
-                        <MenuItem text="About" onAction="#onAbout"/>
-                    </items>
-                </Menu>
-            </menus>
-        </MenuBar>
+        <HBox alignment="CENTER_LEFT" styleClass="topbar">
+            <MenuBar>
+                <menus>
+                    <Menu text="File">
+                        <items>
+                            <MenuItem text="New Project…" onAction="#onNewProject"/>
+                            <SeparatorMenuItem/>
+                            <MenuItem text="Open…" onAction="#onOpen"/>
+                            <MenuItem text="Save" onAction="#onSave"/>
+                            <SeparatorMenuItem/>
+                            <MenuItem text="Exit" onAction="#onExit"/>
+                        </items>
+                    </Menu>
+                    <Menu text="Help">
+                        <items>
+                            <MenuItem text="About" onAction="#onAbout"/>
+                        </items>
+                    </Menu>
+                </menus>
+            </MenuBar>
+
+            <Region HBox.hgrow="ALWAYS"/>
+
+            <HBox fx:id="connectorBar" alignment="CENTER_LEFT" spacing="6"
+                  styleClass="connector-bar" disable="true">
+                <padding>
+                    <Insets top="0" right="10" bottom="0" left="10"/>
+                </padding>
+                <Label text="Connector:"/>
+                <ComboBox fx:id="connectorCombo" prefWidth="200"/>
+                <Button fx:id="connectorSettingsButton" text="⚙"
+                        onAction="#onConnectorSettings" styleClass="icon-button"/>
+                <Button fx:id="runButton" text="Run" onAction="#onRunConnector"/>
+                <ProgressIndicator fx:id="runProgress" prefWidth="20" prefHeight="20"
+                                   visible="false" managed="false"/>
+            </HBox>
+        </HBox>
     </top>
 
     <center>
@@ -56,7 +76,6 @@
                             </padding>
                             <Label text="Console" styleClass="console-title"/>
                             <Region HBox.hgrow="ALWAYS"/>
-                            <Button fx:id="runButton" text="Run" onAction="#onRunConnector"/>
                             <Button text="Clear" onAction="#onClearLog"/>
                         </HBox>
                     </top>

@@ -49,6 +49,36 @@
     -fx-text-fill: #555555;
 }
 
+/* Top bar: menu + connector selector */
+.topbar {
+    -fx-background-color: #f0f0f0;
+    -fx-border-color: #dddddd;
+    -fx-border-width: 0 0 1 0;
+}
+
+.connector-bar .label {
+    -fx-text-fill: #444444;
+}
+
+.icon-button {
+    -fx-font-size: 14px;
+    -fx-padding: 2 8 2 8;
+}
+
+/* Connector settings dialog */
+.dialog .section-title {
+    -fx-font-size: 16px;
+    -fx-font-weight: bold;
+}
+
+.dialog .subtitle {
+    -fx-text-fill: #555555;
+}
+
+.settings-scroll {
+    -fx-background-color: transparent;
+}
+
 /* Console / log pane */
 .console-header {
     -fx-background-color: #ececec;
