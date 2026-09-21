@@ -7,7 +7,7 @@ public class Config {
 
     private int version = 1;
 
-    /** Absolute path to the directory that holds connector executables. */
+    /** Absolute path to the directory that holds connector subdirectories. */
     private String connectorsDir;
 
     public int getVersion() {

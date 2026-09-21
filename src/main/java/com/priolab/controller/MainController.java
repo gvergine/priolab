@@ -11,8 +11,10 @@ import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
+import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.Label;
+import javafx.scene.control.TextArea;
 import javafx.scene.layout.StackPane;
 import javafx.stage.FileChooser;
 import javafx.stage.Modality;
@@ -38,12 +40,17 @@ public class MainController {
     private Label statusLabel;
     @FXML
     private StackPane contentPane;
+    @FXML
+    private TextArea logArea;
+    @FXML
+    private Button runButton;
 
     private App app;
     private ConfigManager configManager;
     private ConnectorManager connectorManager;
 
     private Document document;
+    private Connector runningConnector;
 
     public void init(App app, ConfigManager configManager) {
         this.app = app;
@@ -134,9 +141,7 @@ public class MainController {
         if (!maybeSaveCurrent()) {
             return;
         }
-        if (document != null) {
-            document.close();
-        }
+        shutdown();
         Platform.exit();
     }
 
@@ -145,6 +150,15 @@ public class MainController {
         if (!maybeSaveCurrent()) {
             event.consume();
             return;
+        }
+        shutdown();
+    }
+
+    /** Release resources: stop any running connector and close the document. */
+    private void shutdown() {
+        if (runningConnector != null) {
+            runningConnector.close();
+            runningConnector = null;
         }
         if (document != null) {
             document.close();
@@ -159,6 +173,67 @@ public class MainController {
         alert.setHeaderText("About PrioLab");
         alert.setTitle("About");
         alert.showAndWait();
+    }
+
+    @FXML
+    private void onRunConnector() {
+        if (document == null) {
+            setStatus("Open or create a project first.");
+            return;
+        }
+        String name = document.selectedConnectorProperty().get();
+        if (name == null || name.isBlank()) {
+            setStatus("Select a connector to run.");
+            return;
+        }
+        if (runningConnector != null && runningConnector.isRunning()) {
+            setStatus("A connector is already running.");
+            return;
+        }
+        Connector connector = findConnector(name);
+        if (connector == null) {
+            error("Connector not found: " + name
+                    + "\nIt may have been removed or its manifest is invalid.");
+            return;
+        }
+        appendLog("$ " + name + " — " + connector.getManifest().getCommand());
+        try {
+            connector.run(
+                    line -> Platform.runLater(() -> appendLog(line)),
+                    code -> Platform.runLater(() -> {
+                        appendLog("[exited with code " + code + "]");
+                        runningConnector = null;
+                        runButton.setDisable(false);
+                    }));
+            runningConnector = connector;
+            runButton.setDisable(true);
+            setStatus("Running connector: " + name);
+        } catch (Exception e) {
+            error("Failed to run connector:\n" + e.getMessage());
+        }
+    }
+
+    @FXML
+    private void onClearLog() {
+        logArea.clear();
+    }
+
+    private Connector findConnector(String name) {
+        try {
+            return connectorManager.discover().stream()
+                    .filter(c -> c.getName().equals(name))
+                    .findFirst()
+                    .orElse(null);
+        } catch (IOException e) {
+            error("Failed to list connectors:\n" + e.getMessage());
+            return null;
+        }
+    }
+
+    private void appendLog(String line) {
+        if (logArea != null) {
+            logArea.appendText(line + "\n");
+        }
     }
 
     /** Replace the current document with {@code next}, wiring up the editor. */

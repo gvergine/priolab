@@ -48,17 +48,38 @@ On startup PrioLab looks for `~/.priolab/config.json`:
 ```
 
 ### Connectors
-A connector is an executable in the connectors directory. PrioLab launches it as
-a child process and speaks a **line-delimited protocol**: one request line to
-the connector's stdin, one response line back on its stdout. stderr is kept
-separate (inherited) for diagnostics.
+A connector is a **direct subdirectory** of the connectors directory; the
+**directory name is the connector name**. A subdirectory is a valid connector
+only if it contains a **`manifest.json`** (`connector/ConnectorManifest.java`,
+Jackson-mapped) with:
+- `name` (string, **must equal the directory name**),
+- `version` (string), `author` (string), `description` (string),
+- `command` (string) — the command PrioLab runs, **relative to the connector
+  directory**,
+- `keys` (array of strings, defaults to empty) — the setting names the user
+  configures per project; their values are meant to live in a table of the
+  project's SQLite file.
 
-Command vocabulary lives in `connector/Protocol.java`:
-`initialize`, `list_tasks`, `save`, `shutdown`. Payloads are JSON, e.g.
-request `{"command":"list_tasks","args":{...}}`, response
-`{"ok":true,"data":{...}}`. `Connector` handles process lifecycle + framing
-only; it does not interpret payloads. `ConnectorManager.discover()` lists
-executable files in the connectors directory (not started until first `send`).
+`ConnectorManager.discover()` scans the direct subdirectories, parses/validates
+each `manifest.json`, and **skips invalid ones** (writing a note to stderr:
+missing manifest, name mismatch, or missing version/author/description/command).
+
+**Running:** `Connector.run(onLine, onExit)` launches the manifest `command` as a
+child process with the connector directory as the working directory,
+**merges stderr into stdout** (`redirectErrorStream(true)`) and streams the
+output line by line on a daemon thread. A relative program token (contains `/`,
+e.g. `./run.sh`) is resolved against the connector directory since Java resolves
+relative executables against the JVM's cwd, not `ProcessBuilder.directory`.
+
+The main window's **Console pane** (bottom of a vertical `SplitPane`, with **Run**
+and **Clear** buttons) shows this output: `MainController.onRunConnector()` runs
+the current document's selected connector and appends each line via
+`Platform.runLater`. `Run` is disabled while a connector is running; `shutdown()`
+kills it on exit/close.
+
+`connector/Protocol.java` still defines a JSON command vocabulary
+(`initialize`, `list_tasks`, `save`, `shutdown`) reserved for future structured
+request/response comms; the current run path just streams raw output.
 
 ### SQLite
 `File ▸ Open…` / `File ▸ Save…` in the main window open/create a `.sqlite3`
@@ -106,8 +127,9 @@ src/main/java/com/priolab/
   App.java                         Application entry; chooses wizard vs main
   config/Config.java               config.json POJO
   config/ConfigManager.java        load/save ~/.priolab/config.json (Jackson)
-  connector/Connector.java         one child process, line protocol
-  connector/ConnectorManager.java  discover connectors in the config'd dir
+  connector/Connector.java         one connector dir: manifest + child process
+  connector/ConnectorManifest.java manifest.json POJO (name/version/author/…/keys)
+  connector/ConnectorManager.java  discover connector subdirs in the config'd dir
   connector/Protocol.java          command name constants
   controller/WizardController.java first-run wizard
   controller/NewProjectController.java  modal "new project" wizard

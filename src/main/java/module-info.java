@@ -8,8 +8,9 @@ module com.priolab {
     opens com.priolab to javafx.fxml;
     opens com.priolab.controller to javafx.fxml;
 
-    // Jackson (de)serializes config POJOs via reflection.
+    // Jackson (de)serializes config POJOs and connector manifests via reflection.
     opens com.priolab.config to com.fasterxml.jackson.databind;
+    opens com.priolab.connector to com.fasterxml.jackson.databind;
 
     exports com.priolab;
 }

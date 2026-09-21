@@ -1,85 +1,86 @@
 package com.priolab.connector;
 
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.IntConsumer;
 
 /**
- * A connector is an external program that PrioLab launches as a child process
- * and drives over a simple line-delimited protocol:
+ * A connector is a directory under the configured connectors path that contains
+ * a {@code manifest.json} (see {@link ConnectorManifest}). Its {@link #getName()
+ * name} is the directory name.
  *
- * <ul>
- *   <li>PrioLab writes exactly one request (a single line, typically JSON) to
- *       the connector's stdin.</li>
- *   <li>The connector replies with exactly one response line on its stdout.</li>
- * </ul>
- *
- * The set of logical commands (initialize, list tasks, save prioritization, …)
- * is defined in {@link Protocol}. This class only deals with process lifecycle
- * and framing; it does not interpret the payloads.
+ * <p>PrioLab runs the connector by launching the manifest's
+ * {@link ConnectorManifest#getCommand() command} as a child process, with the
+ * connector directory as the working directory. The child's stdout and stderr
+ * are merged and streamed line by line so the GUI can show them in a console
+ * pane. This class only deals with process lifecycle and streaming.
  */
 public class Connector implements AutoCloseable {
 
-    private final String name;
-    private final Path executable;
+    private final Path directory;
+    private final ConnectorManifest manifest;
 
     private Process process;
-    private BufferedWriter toProcess;
-    private BufferedReader fromProcess;
 
-    public Connector(String name, Path executable) {
-        this.name = name;
-        this.executable = executable;
+    public Connector(Path directory, ConnectorManifest manifest) {
+        this.directory = directory;
+        this.manifest = manifest;
     }
 
+    /** The connector name (equals the directory name and the manifest name). */
     public String getName() {
-        return name;
+        return manifest.getName();
     }
 
-    public Path getExecutable() {
-        return executable;
+    public Path getDirectory() {
+        return directory;
     }
 
-    public boolean isRunning() {
+    public ConnectorManifest getManifest() {
+        return manifest;
+    }
+
+    /** The setting keys this connector expects the user to configure. */
+    public List<String> getKeys() {
+        return manifest.getKeys();
+    }
+
+    public synchronized boolean isRunning() {
         return process != null && process.isAlive();
     }
 
-    /** Launch the connector process if it is not already running. */
-    public synchronized void start() throws IOException {
-        if (isRunning()) {
-            return;
-        }
-        ProcessBuilder pb = new ProcessBuilder(executable.toString());
-        // Keep the connector's stderr separate so diagnostics don't corrupt the
-        // response stream; inherit it so it surfaces in PrioLab's own logs.
-        pb.redirectError(ProcessBuilder.Redirect.INHERIT);
-        process = pb.start();
-        toProcess = new BufferedWriter(
-                new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8));
-        fromProcess = new BufferedReader(
-                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
-    }
-
     /**
-     * Send one request line and block until the connector returns one response
-     * line. Starts the process on demand.
+     * Launch the connector's command (relative to its directory) and stream the
+     * merged stdout+stderr to {@code onLine}, one call per line. Reading happens
+     * on a daemon thread, so {@code onLine} and {@code onExit} are invoked off
+     * the FX thread — UI callers must marshal to the FX thread themselves.
      *
-     * @return the response line, or {@code null} if the connector closed its
-     *     stdout without replying.
+     * @param onLine consumes each output line (never {@code null})
+     * @param onExit consumes the process exit code when it finishes (nullable)
+     * @throws IOException           if the process cannot be started
+     * @throws IllegalStateException if this connector is already running
      */
-    public synchronized String send(String requestLine) throws IOException {
-        if (!isRunning()) {
-            start();
+    public synchronized void run(Consumer<String> onLine, IntConsumer onExit) throws IOException {
+        if (isRunning()) {
+            throw new IllegalStateException("Connector already running: " + getName());
         }
-        toProcess.write(requestLine);
-        toProcess.newLine();
-        toProcess.flush();
-        return fromProcess.readLine();
+        ProcessBuilder pb = new ProcessBuilder(buildCommand());
+        pb.directory(directory.toFile());
+        pb.redirectErrorStream(true); // merge stderr into stdout
+        process = pb.start();
+
+        Process started = process;
+        Thread reader = new Thread(() -> pump(started, onLine, onExit),
+                "connector-" + getName());
+        reader.setDaemon(true);
+        reader.start();
     }
 
     /** Terminate the connector process, gracefully if possible. */
@@ -87,13 +88,6 @@ public class Connector implements AutoCloseable {
     public synchronized void close() {
         if (process == null) {
             return;
-        }
-        try {
-            if (toProcess != null) {
-                toProcess.close();
-            }
-        } catch (IOException ignored) {
-            // best effort
         }
         process.destroy();
         try {
@@ -107,8 +101,62 @@ public class Connector implements AutoCloseable {
         process = null;
     }
 
+    /**
+     * Split the manifest command into argv. The first token (the program) is
+     * resolved against the connector directory when it is a relative path,
+     * because Java resolves a relative executable against the JVM's working
+     * directory rather than {@link ProcessBuilder#directory}.
+     */
+    private List<String> buildCommand() throws IOException {
+        String command = manifest.getCommand();
+        if (command == null || command.isBlank()) {
+            throw new IOException("Connector '" + getName() + "' has no command");
+        }
+        String[] tokens = command.trim().split("\\s+");
+        List<String> argv = new ArrayList<>(tokens.length);
+        String program = tokens[0];
+        Path programPath = Path.of(program);
+        // A relative path (e.g. "./run.sh" or "bin/run") points inside the dir.
+        if (!programPath.isAbsolute() && program.indexOf('/') >= 0) {
+            argv.add(directory.resolve(programPath).normalize().toString());
+        } else {
+            argv.add(program);
+        }
+        for (int i = 1; i < tokens.length; i++) {
+            argv.add(tokens[i]);
+        }
+        return argv;
+    }
+
+    private void pump(Process p, Consumer<String> onLine, IntConsumer onExit) {
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                onLine.accept(line);
+            }
+        } catch (IOException e) {
+            onLine.accept("[error reading output: " + e.getMessage() + "]");
+        }
+        int code;
+        try {
+            code = p.waitFor();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            code = -1;
+        }
+        synchronized (this) {
+            if (process == p) {
+                process = null;
+            }
+        }
+        if (onExit != null) {
+            onExit.accept(code);
+        }
+    }
+
     @Override
     public String toString() {
-        return name + " (" + executable + ")";
+        return getName() + " (" + directory + ")";
     }
 }

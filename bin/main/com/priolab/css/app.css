@@ -34,3 +34,34 @@
     -fx-border-color: #dddddd;
     -fx-border-width: 1 0 0 0;
 }
+
+/* Document editor */
+.document {
+    -fx-background-color: #fafafa;
+}
+
+.document .section-title {
+    -fx-font-size: 16px;
+    -fx-font-weight: bold;
+}
+
+.document .subtitle {
+    -fx-text-fill: #555555;
+}
+
+/* Console / log pane */
+.console-header {
+    -fx-background-color: #ececec;
+    -fx-border-color: #dddddd;
+    -fx-border-width: 0 0 1 0;
+}
+
+.console-title {
+    -fx-font-weight: bold;
+    -fx-text-fill: #444444;
+}
+
+.log {
+    -fx-font-family: "monospace";
+    -fx-font-size: 12px;
+}
