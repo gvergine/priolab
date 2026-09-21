@@ -81,6 +81,7 @@ public class WizardController {
     private void alert(Alert.AlertType type, String message) {
         Alert alert = new Alert(type, message);
         alert.setHeaderText(null);
+        App.applyIcon(alert);
         alert.showAndWait();
     }
 }

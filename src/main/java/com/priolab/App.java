@@ -7,6 +7,7 @@ import javafx.application.Application;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
+import javafx.scene.control.Dialog;
 import javafx.scene.image.Image;
 import javafx.stage.Stage;
 
@@ -39,6 +40,14 @@ public class App extends Application {
             icon = new Image(App.class.getResourceAsStream(ICON));
         }
         stage.getIcons().add(icon);
+    }
+
+    /**
+     * Give an alert / dialog the PrioLab icon. Alerts own a window of their own,
+     * which otherwise shows the default Java icon.
+     */
+    public static void applyIcon(Dialog<?> dialog) {
+        applyIcon((Stage) dialog.getDialogPane().getScene().getWindow());
     }
 
     @Override

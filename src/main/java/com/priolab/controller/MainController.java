@@ -199,6 +199,7 @@ public class MainController {
                         + "powered by pluggable connectors.");
         alert.setHeaderText("About PrioLab");
         alert.setTitle("About");
+        App.applyIcon(alert);
         alert.showAndWait();
     }
 
@@ -493,6 +494,7 @@ public class MainController {
                 ButtonType.YES, ButtonType.NO, ButtonType.CANCEL);
         alert.setHeaderText(null);
         alert.setTitle("Unsaved Changes");
+        App.applyIcon(alert);
         Optional<ButtonType> choice = alert.showAndWait();
         if (choice.isEmpty() || choice.get() == ButtonType.CANCEL) {
             return false;
@@ -544,6 +546,7 @@ public class MainController {
     private void error(String message) {
         Alert alert = new Alert(Alert.AlertType.ERROR, message);
         alert.setHeaderText(null);
+        App.applyIcon(alert);
         alert.showAndWait();
     }
 }

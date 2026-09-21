@@ -1,5 +1,6 @@
 package com.priolab.controller;
 
+import com.priolab.App;
 import javafx.fxml.FXML;
 import javafx.scene.control.Alert;
 import javafx.scene.control.ButtonType;
@@ -93,6 +94,7 @@ public class NewProjectController {
                     "A file already exists at:\n" + path
                             + "\n\nIt will be reused. Continue?");
             confirm.setHeaderText(null);
+            App.applyIcon(confirm);
             Optional<ButtonType> choice = confirm.showAndWait();
             if (choice.isEmpty() || choice.get() != ButtonType.OK) {
                 return;
@@ -117,6 +119,7 @@ public class NewProjectController {
     private void alert(Alert.AlertType type, String message) {
         Alert alert = new Alert(type, message);
         alert.setHeaderText(null);
+        App.applyIcon(alert);
         alert.showAndWait();
     }
 }
