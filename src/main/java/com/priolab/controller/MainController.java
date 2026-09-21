@@ -1,11 +1,14 @@
 package com.priolab.controller;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.priolab.App;
 import com.priolab.config.ConfigManager;
 import com.priolab.connector.Connector;
 import com.priolab.connector.ConnectorManager;
 import com.priolab.connector.Protocol;
 import com.priolab.doc.Document;
+import com.priolab.model.PrioItem;
 import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
@@ -30,9 +33,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Main window controller. Owns the currently open {@link Document}, drives the
@@ -63,7 +66,17 @@ public class MainController {
     private ConnectorManager connectorManager;
 
     private Document document;
+    private DocumentController documentController;
     private Connector runningConnector;
+
+    private final ObjectMapper jsonMapper = new ObjectMapper();
+
+    /** Phases of the line-oriented connector protocol during a run. */
+    private enum RunPhase { IDLE, AWAIT_ACK, AWAIT_COUNT, READ_ITEMS, DONE }
+
+    private RunPhase runPhase = RunPhase.IDLE;
+    private int itemsRemaining;
+    private List<PrioItem> collectedItems;
 
     public void init(App app, ConfigManager configManager) {
         this.app = app;
@@ -211,23 +224,22 @@ public class MainController {
         }
         appendLog("$ " + name + " — " + connector.getManifest().getCommand());
 
+        // Reset the parse state and clear any previously loaded items.
+        runPhase = RunPhase.AWAIT_ACK;
+        itemsRemaining = 0;
+        collectedItems = null;
+        if (documentController != null) {
+            documentController.setItems(List.of());
+        }
+
         String initLine = buildInitLine(connector);
-        AtomicBoolean getSent = new AtomicBoolean(false);
         try {
             connector.run(
-                    line -> Platform.runLater(() -> {
-                        appendLog(line);
-                        // Once the connector acknowledges INIT with OK, ask for
-                        // its items with GET (exactly once).
-                        if (Protocol.OK.equals(line.trim())
-                                && getSent.compareAndSet(false, true)) {
-                            appendLog("> " + Protocol.GET);
-                            sendLine(connector, Protocol.GET);
-                        }
-                    }),
+                    line -> Platform.runLater(() -> handleConnectorLine(connector, line)),
                     code -> Platform.runLater(() -> {
                         appendLog("[exited with code " + code + "]");
                         runningConnector = null;
+                        runPhase = RunPhase.IDLE;
                         setRunning(false);
                     }));
             runningConnector = connector;
@@ -238,7 +250,93 @@ public class MainController {
             sendLine(connector, initLine);
         } catch (Exception e) {
             error("Failed to run connector:\n" + e.getMessage());
+            runPhase = RunPhase.IDLE;
         }
+    }
+
+    /**
+     * Drive the line-oriented protocol as the connector's output arrives (on the
+     * FX thread). After {@code INIT}, the first line must be {@link Protocol#OK};
+     * otherwise nothing further happens and the connector's error stays in the
+     * log. On OK we send {@link Protocol#GET}; the connector then replies with a
+     * count line followed by that many JSON item objects.
+     */
+    private void handleConnectorLine(Connector connector, String line) {
+        appendLog(line);
+        String trimmed = line.trim();
+        switch (runPhase) {
+            case AWAIT_ACK -> {
+                if (trimmed.isEmpty()) {
+                    return;
+                }
+                if (Protocol.OK.equals(trimmed)) {
+                    runPhase = RunPhase.AWAIT_COUNT;
+                    appendLog("> " + Protocol.GET);
+                    sendLine(connector, Protocol.GET);
+                } else {
+                    // INIT was not acknowledged; the error is already in the log.
+                    runPhase = RunPhase.DONE;
+                }
+            }
+            case AWAIT_COUNT -> {
+                if (trimmed.isEmpty()) {
+                    return;
+                }
+                try {
+                    itemsRemaining = Integer.parseInt(trimmed);
+                } catch (NumberFormatException e) {
+                    appendLog("[expected an item count but got: " + line + "]");
+                    runPhase = RunPhase.DONE;
+                    return;
+                }
+                collectedItems = new ArrayList<>();
+                if (itemsRemaining <= 0) {
+                    publishItems();
+                    runPhase = RunPhase.DONE;
+                } else {
+                    runPhase = RunPhase.READ_ITEMS;
+                }
+            }
+            case READ_ITEMS -> {
+                if (trimmed.isEmpty()) {
+                    return;
+                }
+                PrioItem item = parseItem(trimmed);
+                if (item != null) {
+                    collectedItems.add(item);
+                }
+                if (--itemsRemaining <= 0) {
+                    publishItems();
+                    runPhase = RunPhase.DONE;
+                }
+            }
+            default -> {
+                // IDLE / DONE: nothing to parse, output is just logged.
+            }
+        }
+    }
+
+    /** Parse one item JSON object, or {@code null} (logging) if it is malformed. */
+    private PrioItem parseItem(String line) {
+        try {
+            JsonNode node = jsonMapper.readTree(line);
+            return new PrioItem(
+                    node.path("id").asText(""),
+                    node.path("description").asText(""),
+                    node.path("url").asText(""));
+        } catch (IOException e) {
+            appendLog("[invalid item JSON: " + e.getMessage() + "]");
+            return null;
+        }
+    }
+
+    /** Push the collected items into the split lists and update the status. */
+    private void publishItems() {
+        List<PrioItem> items = collectedItems == null ? List.of() : collectedItems;
+        if (documentController != null) {
+            documentController.setItems(items);
+        }
+        setStatus("Loaded " + items.size() + " item(s) to prioritize.");
     }
 
     /** Build the {@code INIT key=value ...} line from the document's settings. */
@@ -346,8 +444,8 @@ public class MainController {
             FXMLLoader loader = new FXMLLoader(
                     getClass().getResource("/com/priolab/fxml/document.fxml"));
             Parent root = loader.load();
-            DocumentController controller = loader.getController();
-            controller.init(document);
+            documentController = loader.getController();
+            documentController.init(document, app.getHostServices());
             contentPane.getChildren().setAll(root);
         } catch (IOException e) {
             error("Failed to load the editor view:\n" + e.getMessage());

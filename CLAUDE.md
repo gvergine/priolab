@@ -71,15 +71,35 @@ output line by line on a daemon thread. A relative program token (contains `/`,
 e.g. `./run.sh`) is resolved against the connector directory since Java resolves
 relative executables against the JVM's cwd, not `ProcessBuilder.directory`.
 
-The main window's **Console pane** (bottom of a vertical `SplitPane`, with **Run**
-and **Clear** buttons) shows this output: `MainController.onRunConnector()` runs
-the current document's selected connector and appends each line via
-`Platform.runLater`. `Run` is disabled while a connector is running; `shutdown()`
-kills it on exit/close.
+The main window's **Console pane** (bottom of a vertical `SplitPane`, with a
+**Clear** button) shows the raw output; every line the connector prints is
+appended via `Platform.runLater`.
 
-`connector/Protocol.java` still defines a JSON command vocabulary
+**Run protocol.** `MainController.onRunConnector()` runs the current document's
+selected connector and drives a small line-oriented handshake over the child's
+stdin/stdout (constants in `connector/Protocol.java`; `Connector.send(line)`
+writes a line to stdin):
+
+1. PrioLab writes `INIT key=value key=value…` (one line) — the per-connector
+   setting values from the document (see *Documents & editing*).
+2. The connector's **next line must be `OK`**. If it is anything else, PrioLab
+   does nothing further — the connector's error text is already in the log.
+3. On `OK`, PrioLab writes `GET`.
+4. The connector then prints a **count** line (an integer N), followed by **N**
+   lines, each a **JSON object** with keys `id`, `description`, `url` (parsed
+   with Jackson into `model/PrioItem.java`; blank lines are skipped, malformed
+   objects are logged and skipped).
+
+The parse is a small state machine in `MainController` (`RunPhase`:
+`AWAIT_ACK → AWAIT_COUNT → READ_ITEMS → DONE`), fed by `handleConnectorLine`.
+The resulting items are handed to `DocumentController.setItems(...)`. While a
+connector runs, `setRunning(true)` disables the connector inputs (combo, ⚙
+settings, Run) and shows an indeterminate `ProgressIndicator`; the exit callback
+re-enables them. `shutdown()` kills the process on exit/close.
+
+`connector/Protocol.java` also still defines a JSON command vocabulary
 (`initialize`, `list_tasks`, `save`, `shutdown`) reserved for future structured
-request/response comms; the current run path just streams raw output.
+request/response comms.
 
 ### SQLite
 `File ▸ Open…` / `File ▸ Save…` in the main window open/create a `.sqlite3`
@@ -106,10 +126,29 @@ the factories; `save()` writes back and clears dirty.
 
 `MainController` owns the current `Document` and hosts the editor view
 (`document.fxml` / `DocumentController`) inside the center `contentPane`.
-**For now the only editable field is the selected connector**: a `ComboBox` of
-the currently loaded connector names (from `ConnectorManager.discover()`),
-two-way bound to `Document.selectedConnectorProperty()` and persisted to
-`meta["connector"]` as a string.
+
+**Connector selection & settings live in the top bar** (an `HBox` alongside the
+`MenuBar`), owned by `MainController`, not the document view:
+- a `ComboBox` of the currently loaded connector names
+  (`ConnectorManager.discover()`), two-way bound to
+  `Document.selectedConnectorProperty()` and persisted to `meta["connector"]`;
+- a **⚙ settings button** that opens a modal dialog (`connectorsettings.fxml` /
+  `ConnectorSettingsController`) with one text field per manifest **key**, seeded
+  from and (on OK) written back into the document. These per-connector key values
+  are persisted in the `connector_settings(connector, key, value)` table and
+  tracked by `Document` (`getConnectorSetting` / `setConnectorSetting`, folded
+  into the `dirty` flag). They are what `INIT key=value …` sends at run time;
+- the **Run** button and its progress spinner.
+
+The whole connector bar is disabled until a project is open.
+
+**Center view** (`DocumentController`) is a **horizontal `SplitPane`** of two
+`ListView<PrioItem>`s. The **left** list holds the connector's items to
+prioritize; the **right** list will show the prioritization *result*. For now
+both show the same items — the plan is to let the user prioritize on the left
+and see the outcome on the right. Each row renders the item `id` as a
+`Hyperlink` (opens `url` via `HostServices.showDocument`) followed by its
+`description`.
 
 Unsaved-changes handling: `New Project`, `Open`, `Exit`, and the window's close
 button all route through `MainController.maybeSaveCurrent()` (Yes/No/Cancel);
@@ -130,16 +169,19 @@ src/main/java/com/priolab/
   connector/Connector.java         one connector dir: manifest + child process
   connector/ConnectorManifest.java manifest.json POJO (name/version/author/…/keys)
   connector/ConnectorManager.java  discover connector subdirs in the config'd dir
-  connector/Protocol.java          command name constants
+  connector/Protocol.java          command/token constants (INIT/OK/GET + JSON vocab)
   controller/WizardController.java first-run wizard
   controller/NewProjectController.java  modal "new project" wizard
-  controller/MainController.java   main window, File menu, current Document
-  controller/DocumentController.java    center editor (connector picker)
+  controller/ConnectorSettingsController.java  modal connector-key editor
+  controller/MainController.java   main window, top bar, run protocol, current Document
+  controller/DocumentController.java    center split view: two item lists
   doc/Document.java                open project: DB + editable state + dirty
-  db/Database.java                 SQLite JDBC wrapper + meta key/value store
+  db/Database.java                 SQLite JDBC wrapper + meta / connector_settings
+  model/PrioItem.java              one item to prioritize (id/description/url)
 src/main/resources/com/priolab/
   fxml/wizard.fxml
   fxml/newproject.fxml
+  fxml/connectorsettings.fxml
   fxml/main.fxml
   fxml/document.fxml
   css/app.css

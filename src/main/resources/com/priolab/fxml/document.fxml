@@ -2,19 +2,29 @@
 
 <?import javafx.geometry.Insets?>
 <?import javafx.scene.control.Label?>
+<?import javafx.scene.control.ListView?>
+<?import javafx.scene.control.SplitPane?>
 <?import javafx.scene.layout.VBox?>
 
-<VBox xmlns="http://javafx.com/javafx"
-      xmlns:fx="http://javafx.com/fxml"
-      fx:controller="com.priolab.controller.DocumentController"
-      spacing="8" styleClass="document">
-    <padding>
-        <Insets top="24" right="24" bottom="24" left="24"/>
-    </padding>
+<SplitPane xmlns="http://javafx.com/javafx"
+           xmlns:fx="http://javafx.com/fxml"
+           fx:controller="com.priolab.controller.DocumentController"
+           orientation="HORIZONTAL" dividerPositions="0.5" styleClass="document">
+    <items>
+        <VBox styleClass="item-pane" spacing="6">
+            <padding>
+                <Insets top="10" right="10" bottom="10" left="10"/>
+            </padding>
+            <Label text="To prioritize" styleClass="pane-title"/>
+            <ListView fx:id="leftList" VBox.vgrow="ALWAYS"/>
+        </VBox>
 
-    <Label fx:id="nameLabel" styleClass="section-title"/>
-    <Label styleClass="subtitle" wrapText="true"
-           text="Pick the connector for this project from the selector in the toolbar, then use the ⚙ button to configure its settings."/>
-
-    <Label fx:id="connectorLabel" styleClass="subtitle"/>
-</VBox>
+        <VBox styleClass="item-pane" spacing="6">
+            <padding>
+                <Insets top="10" right="10" bottom="10" left="10"/>
+            </padding>
+            <Label text="Result" styleClass="pane-title"/>
+            <ListView fx:id="rightList" VBox.vgrow="ALWAYS"/>
+        </VBox>
+    </items>
+</SplitPane>
