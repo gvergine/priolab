@@ -7,6 +7,8 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Thin wrapper around a SQLite database file (via the xerial sqlite-jdbc
@@ -49,6 +51,10 @@ public class Database implements AutoCloseable {
         try (Statement st = connection.createStatement()) {
             st.executeUpdate(
                     "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)");
+            st.executeUpdate(
+                    "CREATE TABLE IF NOT EXISTS connector_settings ("
+                            + "connector TEXT NOT NULL, key TEXT NOT NULL, value TEXT, "
+                            + "PRIMARY KEY (connector, key))");
         }
     }
 
@@ -78,6 +84,50 @@ public class Database implements AutoCloseable {
                         + "ON CONFLICT(key) DO UPDATE SET value = excluded.value")) {
             ps.setString(1, key);
             ps.setString(2, value);
+            ps.executeUpdate();
+        }
+    }
+
+    /**
+     * Read every stored connector setting, grouped by connector name:
+     * {@code connector -> (key -> value)}. Returns an empty map if the database
+     * is not open.
+     */
+    public Map<String, Map<String, String>> getAllConnectorSettings() throws SQLException {
+        Map<String, Map<String, String>> out = new HashMap<>();
+        if (connection == null) {
+            return out;
+        }
+        try (Statement st = connection.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT connector, key, value FROM connector_settings")) {
+            while (rs.next()) {
+                out.computeIfAbsent(rs.getString(1), k -> new HashMap<>())
+                        .put(rs.getString(2), rs.getString(3));
+            }
+        }
+        return out;
+    }
+
+    /** Insert or update a single connector setting value. */
+    public void putConnectorSetting(String connector, String key, String value)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "INSERT INTO connector_settings(connector, key, value) VALUES(?, ?, ?) "
+                        + "ON CONFLICT(connector, key) DO UPDATE SET value = excluded.value")) {
+            ps.setString(1, connector);
+            ps.setString(2, key);
+            ps.setString(3, value);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Remove a stored connector setting, if present. */
+    public void deleteConnectorSetting(String connector, String key) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                "DELETE FROM connector_settings WHERE connector = ? AND key = ?")) {
+            ps.setString(1, connector);
+            ps.setString(2, key);
             ps.executeUpdate();
         }
     }

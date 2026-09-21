@@ -3,6 +3,7 @@ package com.priolab.connector;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -81,6 +82,23 @@ public class Connector implements AutoCloseable {
                 "connector-" + getName());
         reader.setDaemon(true);
         reader.start();
+    }
+
+    /**
+     * Write a single line (a trailing newline is appended) to the running
+     * connector's stdin and flush it. Used to drive the line-oriented protocol
+     * (see {@link Protocol}).
+     *
+     * @throws IOException if no process is running or the write fails
+     */
+    public synchronized void send(String line) throws IOException {
+        Process p = process;
+        if (p == null || !p.isAlive()) {
+            throw new IOException("Connector is not running: " + getName());
+        }
+        OutputStream stdin = p.getOutputStream();
+        stdin.write((line + "\n").getBytes(StandardCharsets.UTF_8));
+        stdin.flush();
     }
 
     /** Terminate the connector process, gracefully if possible. */

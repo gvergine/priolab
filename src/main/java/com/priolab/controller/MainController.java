@@ -4,6 +4,7 @@ import com.priolab.App;
 import com.priolab.config.ConfigManager;
 import com.priolab.connector.Connector;
 import com.priolab.connector.ConnectorManager;
+import com.priolab.connector.Protocol;
 import com.priolab.doc.Document;
 import javafx.application.Platform;
 import javafx.fxml.FXML;
@@ -28,6 +29,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Main window controller. Owns the currently open {@link Document}, drives the
@@ -197,9 +199,21 @@ public class MainController {
             return;
         }
         appendLog("$ " + name + " — " + connector.getManifest().getCommand());
+
+        String initLine = buildInitLine(connector);
+        AtomicBoolean getSent = new AtomicBoolean(false);
         try {
             connector.run(
-                    line -> Platform.runLater(() -> appendLog(line)),
+                    line -> Platform.runLater(() -> {
+                        appendLog(line);
+                        // Once the connector acknowledges INIT with OK, ask for
+                        // its items with GET (exactly once).
+                        if (Protocol.OK.equals(line.trim())
+                                && getSent.compareAndSet(false, true)) {
+                            appendLog("> " + Protocol.GET);
+                            sendLine(connector, Protocol.GET);
+                        }
+                    }),
                     code -> Platform.runLater(() -> {
                         appendLog("[exited with code " + code + "]");
                         runningConnector = null;
@@ -208,8 +222,30 @@ public class MainController {
             runningConnector = connector;
             runButton.setDisable(true);
             setStatus("Running connector: " + name);
+            // Hand the connector its per-project settings straight away.
+            appendLog("> " + initLine);
+            sendLine(connector, initLine);
         } catch (Exception e) {
             error("Failed to run connector:\n" + e.getMessage());
+        }
+    }
+
+    /** Build the {@code INIT key=value ...} line from the document's settings. */
+    private String buildInitLine(Connector connector) {
+        StringBuilder sb = new StringBuilder(Protocol.INIT);
+        for (String key : connector.getKeys()) {
+            sb.append(' ').append(key).append('=')
+                    .append(document.getConnectorSetting(connector.getName(), key));
+        }
+        return sb.toString();
+    }
+
+    /** Write a line to the connector's stdin, surfacing any failure in the log. */
+    private void sendLine(Connector connector, String line) {
+        try {
+            connector.send(line);
+        } catch (IOException e) {
+            appendLog("[failed to write to connector: " + e.getMessage() + "]");
         }
     }
 
@@ -247,7 +283,7 @@ public class MainController {
                     getClass().getResource("/com/priolab/fxml/document.fxml"));
             Parent root = loader.load();
             DocumentController controller = loader.getController();
-            controller.init(document, connectorNames());
+            controller.init(document, connectors());
             contentPane.getChildren().setAll(root);
         } catch (IOException e) {
             error("Failed to load the editor view:\n" + e.getMessage());
@@ -296,11 +332,9 @@ public class MainController {
         return true; // NO -> discard
     }
 
-    private List<String> connectorNames() {
+    private List<Connector> connectors() {
         try {
-            return connectorManager.discover().stream()
-                    .map(Connector::getName)
-                    .toList();
+            return connectorManager.discover();
         } catch (IOException e) {
             error("Failed to list connectors:\n" + e.getMessage());
             return List.of();

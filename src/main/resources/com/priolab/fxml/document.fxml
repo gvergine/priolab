@@ -20,4 +20,7 @@
     <ComboBox fx:id="connectorCombo" prefWidth="320"/>
     <Label fx:id="emptyHint" styleClass="placeholder" wrapText="true" visible="false" managed="false"
            text="No connectors found in the connectors directory."/>
+
+    <Label fx:id="keysTitle" text="Settings" styleClass="section-title" visible="false" managed="false"/>
+    <VBox fx:id="keysBox" spacing="8"/>
 </VBox>
