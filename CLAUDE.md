@@ -322,25 +322,6 @@ never add rows. `DocumentController.setItems(...)` seeds each item from
 restoring a score is not itself an edit and does not dirty the document; ids with
 no stored score simply start blank.
 
-**Modal dialogs go through `MainController.showModal(...)`** (one overload for a
-`Stage`, one for an `Alert`, which also gives the alert the main window as its
-owner so it is centered on it); the file choosers use the same `runModal(...)`
-core.
-
-Its job, besides the icon, is to **hold the window in its maximized state**
-across the dialog. Opening any dialog snaps a maximized stage back to its
-restored size on Linux — [JDK-8319089](https://bugs.openjdk.org/browse/JDK-8319089),
-open since JavaFX 8 with no fix version; per
-[JDK-8332352](https://bugs.openjdk.org/browse/JDK-8332352) it depends on the
-window manager (KWin yes, GNOME Shell no). The moment the window manager
-strikes is not predictable, so `runModal` does not try to catch it at one point
-in time: it listens on `maximizedProperty` for as long as the dialog is up and
-puts the window straight back, then checks once more on close — including the
-case where the flag still claims "maximized" while the window has actually
-shrunk, which is forced by toggling the state. On a platform that behaves,
-nothing fires. Alerts raised by the *nested* dialogs (`NewProjectController`,
-`WizardController`) do not go through it.
-
 Unsaved-changes handling: `New Project`, `Open`, `Exit`, and the window's close
 button all route through `MainController.maybeSaveCurrent()` (Yes/No/Cancel);
 the window title shows `PrioLab — <name>` with a trailing `*` while dirty. The

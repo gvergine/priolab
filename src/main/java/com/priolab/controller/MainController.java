@@ -13,7 +13,6 @@ import com.priolab.model.PrioItem;
 import com.priolab.model.ScoredItem;
 import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
-import javafx.beans.value.ChangeListener;
 import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
@@ -49,7 +48,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.function.Supplier;
 
 /**
  * Main window controller. Owns the currently open {@link Document}, drives the
@@ -230,7 +228,7 @@ public class MainController {
                     getClass().getResource("/com/priolab/css/app.css").toExternalForm());
             dialog.setScene(scene);
             controller.setStage(dialog);
-            showModal(dialog);
+            dialog.showAndWait();
 
             result = controller.getResult();
         } catch (IOException e) {
@@ -263,7 +261,7 @@ public class MainController {
         chooser.setTitle("Open Project");
         chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(
                 "SQLite Database", "*.sqlite3", "*.sqlite", "*.db"));
-        File file = runModal(() -> chooser.showOpenDialog(app.getStage()));
+        File file = chooser.showOpenDialog(app.getStage());
         if (file == null) {
             return;
         }
@@ -322,7 +320,8 @@ public class MainController {
                         + "verginegiovanni@gmail.com");
         alert.setHeaderText("PrioLab");
         alert.setTitle("About");
-        showModal(alert);
+        App.applyIcon(alert);
+        alert.showAndWait();
     }
 
     /** Run the selected connector and load what it prints into the tables. */
@@ -617,72 +616,10 @@ public class MainController {
             dialog.setScene(scene);
             controller.setStage(dialog);
             controller.init(document, kind, plugin);
-            showModal(dialog);
+            dialog.showAndWait();
         } catch (IOException e) {
             error("Failed to open " + kind.label() + " settings:\n" + e.getMessage());
         }
-    }
-
-    /**
-     * Run a modal dialog while <b>holding the main window in its maximized
-     * state</b>.
-     *
-     * <p>Opening any dialog snaps a maximized stage back to its restored size on
-     * Linux — <a href="https://bugs.openjdk.org/browse/JDK-8319089">JDK-8319089</a>,
-     * open since JavaFX 8 with no fix version, and per
-     * <a href="https://bugs.openjdk.org/browse/JDK-8332352">JDK-8332352</a> it
-     * depends on the window manager (KWin yes, GNOME Shell no). Since the
-     * moment the window manager strikes is not ours to predict, we do not try
-     * to catch it at one point in time: for as long as the dialog is up we
-     * watch {@code maximizedProperty} and put the window straight back, and
-     * once it closes we check again — including the case where the flag still
-     * claims "maximized" while the window has actually been resized, which is
-     * then forced by toggling the state.
-     *
-     * <p>On a platform that behaves, nothing ever fires and the window is left
-     * untouched.
-     */
-    private <T> T runModal(Supplier<T> show) {
-        Stage owner = app.getStage();
-        if (!owner.isMaximized()) {
-            return show.get();
-        }
-        double width = owner.getWidth();
-        double height = owner.getHeight();
-        ChangeListener<Boolean> keeper = (obs, was, is) -> {
-            if (!is) {
-                Platform.runLater(() -> owner.setMaximized(true));
-            }
-        };
-        owner.maximizedProperty().addListener(keeper);
-        try {
-            return show.get();
-        } finally {
-            owner.maximizedProperty().removeListener(keeper);
-            if (!owner.isMaximized()) {
-                owner.setMaximized(true);
-            } else if (owner.getWidth() != width || owner.getHeight() != height) {
-                // Still flagged maximized, yet the window did shrink: make
-                // JavaFX re-apply the state instead of believing the flag.
-                owner.setMaximized(false);
-                owner.setMaximized(true);
-            }
-        }
-    }
-
-    /** Show a modal dialog owned by the main window (see {@link #runModal}). */
-    private void showModal(Stage dialog) {
-        runModal(() -> {
-            dialog.showAndWait();
-            return null;
-        });
-    }
-
-    /** As {@link #showModal(Stage)}, for the alerts (which own no stage of ours). */
-    private Optional<ButtonType> showModal(Alert alert) {
-        alert.initOwner(app.getStage());   // also centers the alert on the window
-        App.applyIcon(alert);
-        return runModal(alert::showAndWait);
     }
 
     /** Look up one connector / exporter by name in its own directory. */
@@ -764,7 +701,8 @@ public class MainController {
                 ButtonType.YES, ButtonType.NO, ButtonType.CANCEL);
         alert.setHeaderText(null);
         alert.setTitle("Unsaved Changes");
-        Optional<ButtonType> choice = showModal(alert);
+        App.applyIcon(alert);
+        Optional<ButtonType> choice = alert.showAndWait();
         if (choice.isEmpty() || choice.get() == ButtonType.CANCEL) {
             return false;
         }
@@ -816,6 +754,7 @@ public class MainController {
     private void error(String message) {
         Alert alert = new Alert(Alert.AlertType.ERROR, message);
         alert.setHeaderText(null);
-        showModal(alert);
+        App.applyIcon(alert);
+        alert.showAndWait();
     }
 }
