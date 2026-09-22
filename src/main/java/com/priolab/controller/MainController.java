@@ -228,7 +228,7 @@ public class MainController {
                     getClass().getResource("/com/priolab/css/app.css").toExternalForm());
             dialog.setScene(scene);
             controller.setStage(dialog);
-            dialog.showAndWait();
+            showModal(dialog);
 
             result = controller.getResult();
         } catch (IOException e) {
@@ -261,7 +261,9 @@ public class MainController {
         chooser.setTitle("Open Project");
         chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(
                 "SQLite Database", "*.sqlite3", "*.sqlite", "*.db"));
+        boolean maximized = app.getStage().isMaximized();
         File file = chooser.showOpenDialog(app.getStage());
+        restoreMaximized(maximized);
         if (file == null) {
             return;
         }
@@ -320,8 +322,7 @@ public class MainController {
                         + "verginegiovanni@gmail.com");
         alert.setHeaderText("PrioLab");
         alert.setTitle("About");
-        App.applyIcon(alert);
-        alert.showAndWait();
+        showModal(alert);
     }
 
     /** Run the selected connector and load what it prints into the tables. */
@@ -616,9 +617,45 @@ public class MainController {
             dialog.setScene(scene);
             controller.setStage(dialog);
             controller.init(document, kind, plugin);
-            dialog.showAndWait();
+            showModal(dialog);
         } catch (IOException e) {
             error("Failed to open " + kind.label() + " settings:\n" + e.getMessage());
+        }
+    }
+
+    /**
+     * Show a modal dialog owned by the main window, keeping that window
+     * maximized across it.
+     *
+     * <p>When a modal child disables its owner, JavaFX can drop a maximized
+     * window back to its restored size — the window visibly un-maximizes as the
+     * popup opens (seen on Windows). Re-applying the flag once the dialog is up
+     * and again when it closes papers over that; where the bug does not occur
+     * both checks are no-ops, because the flag is already what we want.
+     */
+    private void showModal(Stage dialog) {
+        boolean maximized = app.getStage().isMaximized();
+        dialog.setOnShown(event -> Platform.runLater(() -> restoreMaximized(maximized)));
+        dialog.showAndWait();
+        restoreMaximized(maximized);
+    }
+
+    /** As {@link #showModal(Stage)}, for the alerts (which own no stage of ours). */
+    private Optional<ButtonType> showModal(Alert alert) {
+        Stage owner = app.getStage();
+        alert.initOwner(owner);   // also centers the alert on the window
+        App.applyIcon(alert);
+        boolean maximized = owner.isMaximized();
+        alert.setOnShown(event -> Platform.runLater(() -> restoreMaximized(maximized)));
+        Optional<ButtonType> choice = alert.showAndWait();
+        restoreMaximized(maximized);
+        return choice;
+    }
+
+    /** Re-maximize the main window if a modal dialog knocked it out of it. */
+    private void restoreMaximized(boolean wasMaximized) {
+        if (wasMaximized && !app.getStage().isMaximized()) {
+            app.getStage().setMaximized(true);
         }
     }
 
@@ -701,8 +738,7 @@ public class MainController {
                 ButtonType.YES, ButtonType.NO, ButtonType.CANCEL);
         alert.setHeaderText(null);
         alert.setTitle("Unsaved Changes");
-        App.applyIcon(alert);
-        Optional<ButtonType> choice = alert.showAndWait();
+        Optional<ButtonType> choice = showModal(alert);
         if (choice.isEmpty() || choice.get() == ButtonType.CANCEL) {
             return false;
         }
@@ -754,7 +790,6 @@ public class MainController {
     private void error(String message) {
         Alert alert = new Alert(Alert.AlertType.ERROR, message);
         alert.setHeaderText(null);
-        App.applyIcon(alert);
-        alert.showAndWait();
+        showModal(alert);
     }
 }

@@ -79,11 +79,21 @@
     -fx-background: #fffbcc;
 }
 
-/* Top bar: menu + connector selector */
+/* Top bar: menu + connector selector. The MenuBar brings its own background and
+   bottom border, which stopped halfway across the bar and made the strip look
+   like two different widgets; let .topbar own the background and the single
+   border that runs the whole width. */
 .topbar {
     -fx-background-color: #f0f0f0;
     -fx-border-color: #dddddd;
     -fx-border-width: 0 0 1 0;
+}
+
+.topbar .menu-bar {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-border-width: 0;
+    -fx-padding: 0 4 0 0;
 }
 
 .connector-bar .label {

@@ -322,6 +322,17 @@ never add rows. `DocumentController.setItems(...)` seeds each item from
 restoring a score is not itself an edit and does not dirty the document; ids with
 no stored score simply start blank.
 
+**Modal dialogs go through `MainController.showModal(...)`** (one overload for a
+`Stage`, one for an `Alert`, which also gives the alert the main window as its
+owner so it is centered on it). Besides the icon, it preserves the window's
+**maximized** state: when a modal child disables its owner, JavaFX can drop a
+maximized window back to its restored size — it visibly un-maximizes as the
+popup opens, seen on Windows — so the flag is re-applied once the dialog is up
+and again when it closes. Where the platform does not misbehave (Linux/GTK
+here) both checks are no-ops. The file choosers do the same around
+`showOpenDialog`. Alerts raised by the *nested* dialogs
+(`NewProjectController`, `WizardController`) do not go through it.
+
 Unsaved-changes handling: `New Project`, `Open`, `Exit`, and the window's close
 button all route through `MainController.maybeSaveCurrent()` (Yes/No/Cancel);
 the window title shows `PrioLab — <name>` with a trailing `*` while dirty. The
