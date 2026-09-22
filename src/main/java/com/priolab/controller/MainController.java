@@ -6,7 +6,6 @@ import com.priolab.App;
 import com.priolab.config.ConfigManager;
 import com.priolab.connector.Connector;
 import com.priolab.connector.ConnectorManager;
-import com.priolab.connector.Protocol;
 import com.priolab.doc.Document;
 import com.priolab.model.PrioItem;
 import javafx.application.Platform;
@@ -34,7 +33,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -71,8 +72,8 @@ public class MainController {
 
     private final ObjectMapper jsonMapper = new ObjectMapper();
 
-    /** Phases of the line-oriented connector protocol during a run. */
-    private enum RunPhase { IDLE, AWAIT_ACK, AWAIT_COUNT, READ_ITEMS, DONE }
+    /** Phases of the connector's stdout as a run is read. */
+    private enum RunPhase { IDLE, AWAIT_COUNT, READ_ITEMS, DONE }
 
     private RunPhase runPhase = RunPhase.IDLE;
     private int itemsRemaining;
@@ -227,17 +228,20 @@ public class MainController {
         appendLog("$ " + name + " — " + connector.getManifest().getCommand());
 
         // Reset the parse state and clear any previously loaded items.
-        runPhase = RunPhase.AWAIT_ACK;
+        runPhase = RunPhase.AWAIT_COUNT;
         itemsRemaining = 0;
         collectedItems = null;
         if (documentController != null) {
             documentController.setItems(List.of());
         }
 
-        String initLine = buildInitLine(connector);
+        Map<String, String> env = buildEnvironment(connector);
+        env.forEach((key, value) -> appendLog("  " + key + "=" + value));
         try {
             connector.run(
-                    line -> Platform.runLater(() -> handleConnectorLine(connector, line)),
+                    env,
+                    line -> Platform.runLater(() -> handleConnectorLine(line)),
+                    line -> Platform.runLater(() -> appendLog(line)),
                     code -> Platform.runLater(() -> {
                         appendLog("[exited with code " + code + "]");
                         runningConnector = null;
@@ -247,9 +251,6 @@ public class MainController {
             runningConnector = connector;
             setRunning(true);
             setStatus("Running connector: " + name);
-            // Hand the connector its per-project settings straight away.
-            appendLog("> " + initLine);
-            sendLine(connector, initLine);
         } catch (Exception e) {
             error("Failed to run connector:\n" + e.getMessage());
             runPhase = RunPhase.IDLE;
@@ -257,29 +258,14 @@ public class MainController {
     }
 
     /**
-     * Drive the line-oriented protocol as the connector's output arrives (on the
-     * FX thread). After {@code INIT}, the first line must be {@link Protocol#OK};
-     * otherwise nothing further happens and the connector's error stays in the
-     * log. On OK we send {@link Protocol#GET}; the connector then replies with a
-     * count line followed by that many JSON item objects.
+     * Read the connector's stdout as it arrives (on the FX thread): the first
+     * non-blank line is the number of items, followed by that many JSON item
+     * objects. Anything the connector prints afterwards is only logged.
      */
-    private void handleConnectorLine(Connector connector, String line) {
+    private void handleConnectorLine(String line) {
         appendLog(line);
         String trimmed = line.trim();
         switch (runPhase) {
-            case AWAIT_ACK -> {
-                if (trimmed.isEmpty()) {
-                    return;
-                }
-                if (Protocol.OK.equals(trimmed)) {
-                    runPhase = RunPhase.AWAIT_COUNT;
-                    appendLog("> " + Protocol.GET);
-                    sendLine(connector, Protocol.GET);
-                } else {
-                    // INIT was not acknowledged; the error is already in the log.
-                    runPhase = RunPhase.DONE;
-                }
-            }
             case AWAIT_COUNT -> {
                 if (trimmed.isEmpty()) {
                     return;
@@ -341,14 +327,19 @@ public class MainController {
         setStatus("Loaded " + items.size() + " item(s) to prioritize.");
     }
 
-    /** Build the {@code INIT key=value ...} line from the document's settings. */
-    private String buildInitLine(Connector connector) {
-        StringBuilder sb = new StringBuilder(Protocol.INIT);
+    /**
+     * The environment the connector's command is launched with: one variable per
+     * manifest key, named exactly like the key and holding the value configured
+     * for this project (empty when the user has not set one). They are added to
+     * the environment PrioLab itself was started with.
+     */
+    private Map<String, String> buildEnvironment(Connector connector) {
+        Map<String, String> env = new LinkedHashMap<>();
         for (String key : connector.getKeys()) {
-            sb.append(' ').append(key).append('=')
-                    .append(document.getConnectorSetting(connector.getName(), key));
+            String value = document.getConnectorSetting(connector.getName(), key);
+            env.put(key, value == null ? "" : value);
         }
-        return sb.toString();
+        return env;
     }
 
     /**
@@ -361,15 +352,6 @@ public class MainController {
         connectorSettingsButton.setDisable(running);
         runProgress.setVisible(running);
         runProgress.setManaged(running);
-    }
-
-    /** Write a line to the connector's stdin, surfacing any failure in the log. */
-    private void sendLine(Connector connector, String line) {
-        try {
-            connector.send(line);
-        } catch (IOException e) {
-            appendLog("[failed to write to connector: " + e.getMessage() + "]");
-        }
     }
 
     @FXML

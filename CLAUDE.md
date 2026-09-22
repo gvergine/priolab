@@ -1,8 +1,9 @@
 # PrioLab
 
 A JavaFX desktop application that helps the user prioritize *anything*. The
-things to prioritize come from **connectors** — external programs PrioLab drives
-over stdin/stdout.
+things to prioritize come from **connectors** — external programs PrioLab runs
+with the project's settings in the environment, reading their result on
+stdout.
 
 ## Tech stack
 
@@ -91,42 +92,59 @@ Jackson-mapped) with:
 each `manifest.json`, and **skips invalid ones** (writing a note to stderr:
 missing manifest, name mismatch, or missing version/author/description/command).
 
-**Running:** `Connector.run(onLine, onExit)` launches the manifest `command` as a
-child process with the connector directory as the working directory,
-**merges stderr into stdout** (`redirectErrorStream(true)`) and streams the
-output line by line on a daemon thread. A relative program token (contains `/`,
-e.g. `./run.sh`) is resolved against the connector directory since Java resolves
-relative executables against the JVM's cwd, not `ProcessBuilder.directory`.
+**Running:** `Connector.run(env, onLine, onErrorLine, onExit)` launches the
+manifest `command` as a child process with the connector directory as the
+working directory. A relative program token (contains `/`, e.g. `./run.sh`) is
+resolved against the connector directory since Java resolves relative
+executables against the JVM's cwd, not `ProcessBuilder.directory`.
 
-The main window's **Console pane** (bottom of a vertical `SplitPane`, with a
-**Clear** button) shows the raw output; every line the connector prints is
-appended via `Platform.runLater`.
+**There is no handshake and nothing is ever written to the connector's stdin**
+(it is closed right after launch, so a connector that reads it sees EOF).
+Everything PrioLab has to say is in the environment; everything the connector
+has to say is on stdout.
+
+**stdout and stderr are read separately**, each line by line on its own daemon
+thread: **stdout is the result** PrioLab parses, **stderr is diagnostics** that
+only reach the console pane. A connector may therefore log freely to stderr
+without corrupting its output. The exit callback fires after stdout ends (and
+after a short join on the stderr reader, so trailing diagnostics still land
+before `[exited with code N]`).
 
 **Run protocol.** `MainController.onRunConnector()` runs the current document's
-selected connector and drives a small line-oriented handshake over the child's
-stdin/stdout (constants in `connector/Protocol.java`; `Connector.send(line)`
-writes a line to stdin):
+selected connector:
 
-1. PrioLab writes `INIT key=value key=value…` (one line) — the per-connector
-   setting values from the document (see *Documents & editing*).
-2. The connector's **next line must be `OK`**. If it is anything else, PrioLab
-   does nothing further — the connector's error text is already in the log.
-3. On `OK`, PrioLab writes `GET`.
-4. The connector then prints a **count** line (an integer N), followed by **N**
-   lines, each a **JSON object** with keys `id`, `description`, `url` (parsed
-   with Jackson into `model/PrioItem.java`; blank lines are skipped, malformed
-   objects are logged and skipped).
+1. PrioLab launches `command` with **one environment variable per manifest
+   `key`, named exactly like the key**, holding the value configured for this
+   project (empty string when the user has not set one). These are *added* to
+   the environment PrioLab itself was started with, so `PATH` & co. are
+   inherited. A key named like an existing variable overrides it.
+2. The connector prints a **count** line (an integer N) as its first non-blank
+   stdout line, followed by **N** lines, each a **JSON object** with keys `id`,
+   `description`, `url` (parsed with Jackson into `model/PrioItem.java`; blank
+   lines are skipped, malformed objects are logged and skipped). Anything it
+   prints after that is only logged.
 
 The parse is a small state machine in `MainController` (`RunPhase`:
-`AWAIT_ACK → AWAIT_COUNT → READ_ITEMS → DONE`), fed by `handleConnectorLine`.
-The resulting items are handed to `DocumentController.setItems(...)`. While a
-connector runs, `setRunning(true)` disables the connector inputs (combo, ⚙
-settings, Run) and shows an indeterminate `ProgressIndicator`; the exit callback
-re-enables them. `shutdown()` kills the process on exit/close.
+`AWAIT_COUNT → READ_ITEMS → DONE`), fed by `handleConnectorLine`. The resulting
+items are handed to `DocumentController.setItems(...)`. While a connector runs,
+`setRunning(true)` disables the connector inputs (combo, ⚙ settings, Run) and
+shows an indeterminate `ProgressIndicator`; the exit callback re-enables them.
+`shutdown()` kills the process on exit/close.
 
-`connector/Protocol.java` also still defines a JSON command vocabulary
-(`initialize`, `list_tasks`, `save`, `shutdown`) reserved for future structured
-request/response comms.
+The main window's **Console pane** (bottom of a vertical `SplitPane`, with a
+**Clear** button) shows the run: the command line, the environment PrioLab
+passed, then every stdout and stderr line, appended via `Platform.runLater`.
+
+A minimal connector is therefore just:
+
+```python
+#!/usr/bin/env python3
+import json, os
+items = [{"id": "A-1", "description": "something", "url": os.getenv("baseurl", "")}]
+print(len(items), flush=True)
+for item in items:
+    print(json.dumps(item), flush=True)
+```
 
 ### SQLite
 `File ▸ Open…` / `File ▸ Save…` in the main window open/create a `.sqlite3`
@@ -168,7 +186,8 @@ the factories; `save()` writes back and clears dirty.
   from and (on OK) written back into the document. These per-connector key values
   are persisted in the `connector_settings(connector, key, value)` table and
   tracked by `Document` (`getConnectorSetting` / `setConnectorSetting`, folded
-  into the `dirty` flag). They are what `INIT key=value …` sends at run time;
+  into the `dirty` flag). They are the **environment variables** the connector
+  command is launched with;
 - the **Run** button and its progress spinner.
 
 The whole connector bar is disabled until a project is open.
@@ -237,10 +256,9 @@ src/main/java/com/priolab/
   App.java                         Application entry; chooses wizard vs main
   config/Config.java               config.json POJO
   config/ConfigManager.java        load/save ~/.priolab/config.json (Jackson)
-  connector/Connector.java         one connector dir: manifest + child process
+  connector/Connector.java         one connector dir: manifest + child process (env in, stdout out)
   connector/ConnectorManifest.java manifest.json POJO (name/version/author/…/keys)
   connector/ConnectorManager.java  discover connector subdirs in the config'd dir
-  connector/Protocol.java          command/token constants (INIT/OK/GET + JSON vocab)
   controller/WizardController.java first-run wizard
   controller/NewProjectController.java  modal "new project" wizard
   controller/ConnectorSettingsController.java  modal connector-key editor
@@ -283,5 +301,6 @@ src/main/resources/com/priolab/
 
 - Keep the app modular — new packages that FXML or Jackson touch by reflection need
   matching `opens` in `module-info.java`.
-- New connector commands: add a constant to `Protocol.java` first.
+- The connector contract is *environment variables in, stdout out*. Keep it
+  that way: no stdin traffic, no handshake, nothing parsed out of stderr.
 - Pin dependency versions in the `ext { }` block in `build.gradle`.

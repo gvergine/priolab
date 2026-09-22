@@ -2,12 +2,13 @@ package com.priolab.connector;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
@@ -19,9 +20,12 @@ import java.util.function.IntConsumer;
  *
  * <p>PrioLab runs the connector by launching the manifest's
  * {@link ConnectorManifest#getCommand() command} as a child process, with the
- * connector directory as the working directory. The child's stdout and stderr
- * are merged and streamed line by line so the GUI can show them in a console
- * pane. This class only deals with process lifecycle and streaming.
+ * connector directory as the working directory and the per-project setting
+ * values as environment variables. There is no handshake: the connector simply
+ * prints its result on stdout and exits. stdout and stderr are streamed
+ * separately, line by line, because stdout carries the result while stderr is
+ * only diagnostics for the console pane. This class deals with process
+ * lifecycle and streaming, nothing else.
  */
 public class Connector implements AutoCloseable {
 
@@ -58,47 +62,52 @@ public class Connector implements AutoCloseable {
     }
 
     /**
-     * Launch the connector's command (relative to its directory) and stream the
-     * merged stdout+stderr to {@code onLine}, one call per line. Reading happens
-     * on a daemon thread, so {@code onLine} and {@code onExit} are invoked off
-     * the FX thread — UI callers must marshal to the FX thread themselves.
+     * Launch the connector's command (relative to its directory) with
+     * {@code env} added to the inherited environment, and stream its output line
+     * by line: stdout to {@code onLine} (the result PrioLab parses) and stderr
+     * to {@code onErrorLine} (diagnostics). Reading happens on daemon threads,
+     * so the callbacks are invoked off the FX thread — UI callers must marshal
+     * to the FX thread themselves.
      *
-     * @param onLine consumes each output line (never {@code null})
-     * @param onExit consumes the process exit code when it finishes (nullable)
+     * <p>The child's stdin is closed right away, so a connector that reads it
+     * sees end-of-file instead of hanging.
+     *
+     * @param env         extra environment variables for the child
+     * @param onLine      consumes each stdout line (never {@code null})
+     * @param onErrorLine consumes each stderr line (never {@code null})
+     * @param onExit      consumes the process exit code when it finishes (nullable)
      * @throws IOException           if the process cannot be started
      * @throws IllegalStateException if this connector is already running
      */
-    public synchronized void run(Consumer<String> onLine, IntConsumer onExit) throws IOException {
+    public synchronized void run(Map<String, String> env,
+                                 Consumer<String> onLine,
+                                 Consumer<String> onErrorLine,
+                                 IntConsumer onExit) throws IOException {
         if (isRunning()) {
             throw new IllegalStateException("Connector already running: " + getName());
         }
         ProcessBuilder pb = new ProcessBuilder(buildCommand());
         pb.directory(directory.toFile());
-        pb.redirectErrorStream(true); // merge stderr into stdout
+        pb.environment().putAll(env);
         process = pb.start();
 
         Process started = process;
-        Thread reader = new Thread(() -> pump(started, onLine, onExit),
+        try {
+            started.getOutputStream().close();
+        } catch (IOException ignored) {
+            // The child may already be gone; its stdin is of no use to us.
+        }
+
+        Thread stderrReader = new Thread(
+                () -> readLines(started.getErrorStream(), onErrorLine),
+                "connector-" + getName() + "-stderr");
+        stderrReader.setDaemon(true);
+        stderrReader.start();
+
+        Thread reader = new Thread(() -> pump(started, onLine, stderrReader, onExit),
                 "connector-" + getName());
         reader.setDaemon(true);
         reader.start();
-    }
-
-    /**
-     * Write a single line (a trailing newline is appended) to the running
-     * connector's stdin and flush it. Used to drive the line-oriented protocol
-     * (see {@link Protocol}).
-     *
-     * @throws IOException if no process is running or the write fails
-     */
-    public synchronized void send(String line) throws IOException {
-        Process p = process;
-        if (p == null || !p.isAlive()) {
-            throw new IOException("Connector is not running: " + getName());
-        }
-        OutputStream stdin = p.getOutputStream();
-        stdin.write((line + "\n").getBytes(StandardCharsets.UTF_8));
-        stdin.flush();
     }
 
     /** Terminate the connector process, gracefully if possible. */
@@ -146,15 +155,13 @@ public class Connector implements AutoCloseable {
         return argv;
     }
 
-    private void pump(Process p, Consumer<String> onLine, IntConsumer onExit) {
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                onLine.accept(line);
-            }
-        } catch (IOException e) {
-            onLine.accept("[error reading output: " + e.getMessage() + "]");
+    private void pump(Process p, Consumer<String> onLine, Thread stderrReader, IntConsumer onExit) {
+        readLines(p.getInputStream(), onLine);
+        try {
+            // Let the last diagnostics land before we report the exit code.
+            stderrReader.join(TimeUnit.SECONDS.toMillis(2));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
         int code;
         try {
@@ -170,6 +177,19 @@ public class Connector implements AutoCloseable {
         }
         if (onExit != null) {
             onExit.accept(code);
+        }
+    }
+
+    /** Feed every line of {@code stream} to {@code consumer} until end of file. */
+    private static void readLines(InputStream stream, Consumer<String> consumer) {
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                consumer.accept(line);
+            }
+        } catch (IOException e) {
+            consumer.accept("[error reading output: " + e.getMessage() + "]");
         }
     }
 

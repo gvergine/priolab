@@ -22,7 +22,8 @@ import java.util.List;
  * {@link #command} is the command PrioLab runs, resolved relative to the
  * connector directory. The {@link #keys} are the names of settings the user
  * configures per project; their values are stored in a table of the project's
- * SQLite file.
+ * SQLite file and handed to the command as environment variables of the same
+ * name (see {@link Connector#run}).
  */
 public class ConnectorManifest {
 
