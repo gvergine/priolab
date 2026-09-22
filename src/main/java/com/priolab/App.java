@@ -58,14 +58,21 @@ public class App extends Application {
 
         if (configManager.configExists()) {
             configManager.load();
-            showMain();
+            // A config written before exporters existed is incomplete: ask once
+            // more, with what is already configured prefilled.
+            String exporters = configManager.get().getExportersDir();
+            if (exporters == null || exporters.isBlank()) {
+                showWizard();
+            } else {
+                showMain();
+            }
         } else {
             showWizard();
         }
         stage.show();
     }
 
-    /** Show the first-run configuration wizard. */
+    /** Show the configuration wizard (first run, or a config missing a value). */
     public void showWizard() {
         WizardController controller = swapScene("/com/priolab/fxml/wizard.fxml", 540, 380);
         controller.init(this, configManager);

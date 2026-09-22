@@ -2,6 +2,7 @@ package com.priolab.doc;
 
 import com.priolab.db.Database;
 import com.priolab.model.ItemScore;
+import com.priolab.model.PluginKind;
 
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.ReadOnlyBooleanProperty;
@@ -11,6 +12,7 @@ import javafx.beans.property.StringProperty;
 
 import java.nio.file.Path;
 import java.sql.SQLException;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -19,37 +21,39 @@ import java.util.Objects;
  * An open PrioLab project: the SQLite {@link Database} plus the in-memory,
  * editable state layered on top of it.
  *
- * <p>The editable fields are the name of the selected connector (stored in the
- * {@code meta} table under the key {@code connector}) and the per-connector
- * setting values the user assigns to the connector's declared keys (stored in
- * the {@code connector_settings} table) and the per-item WSJF scores keyed by
- * item id (stored in the {@code item_scores} table). The {@link #dirtyProperty() dirty} flag
- * tracks whether any in-memory value has diverged from what is persisted, so the
- * UI can prompt to save.
+ * <p>The editable fields are the names of the selected connector and exporter
+ * (stored in the {@code meta} table under the keys {@code connector} and
+ * {@code exporter}), the setting values the user assigns to their declared keys
+ * (stored per {@link PluginKind} in the {@code connector_settings} /
+ * {@code exporter_settings} tables) and the per-item WSJF scores keyed by item
+ * id (stored in the {@code item_scores} table). The {@link #dirtyProperty() dirty}
+ * flag tracks whether any in-memory value has diverged from what is persisted,
+ * so the UI can prompt to save.
  */
 public class Document implements AutoCloseable {
-
-    /** {@code meta} key under which the selected connector name is stored. */
-    private static final String KEY_CONNECTOR = "connector";
 
     private final Database database;
     private final Path path;
     private String name;
 
-    private final StringProperty selectedConnector = new SimpleStringProperty();
+    /** Selected plugin name per kind, each stored under its own {@code meta} key. */
+    private final Map<PluginKind, StringProperty> selected = new EnumMap<>(PluginKind.class);
+
     private final BooleanProperty dirty = new SimpleBooleanProperty(false);
 
-    /** The last value written to (or read from) disk, for dirty comparison. */
-    private String savedConnector;
+    /** The last selection written to (or read from) disk, for dirty comparison. */
+    private final Map<PluginKind, String> savedSelection = new EnumMap<>(PluginKind.class);
 
     /**
-     * Per-connector setting values, {@code connector -> (key -> value)}. Empty
-     * values are normalised away (absent), so the two maps compare cleanly for
-     * the dirty check. {@code savedSettings} mirrors what is on disk;
-     * {@code editSettings} holds the live in-memory edits.
+     * Setting values per kind, {@code name -> (key -> value)}. Empty values are
+     * normalised away (absent), so the two maps compare cleanly for the dirty
+     * check. {@code savedSettings} mirrors what is on disk; {@code editSettings}
+     * holds the live in-memory edits.
      */
-    private Map<String, Map<String, String>> savedSettings = new HashMap<>();
-    private Map<String, Map<String, String>> editSettings = new HashMap<>();
+    private final Map<PluginKind, Map<String, Map<String, String>>> savedSettings =
+            new EnumMap<>(PluginKind.class);
+    private final Map<PluginKind, Map<String, Map<String, String>>> editSettings =
+            new EnumMap<>(PluginKind.class);
 
     /**
      * Per-item WSJF scores, {@code item id -> score}. Scores that carry nothing
@@ -64,7 +68,13 @@ public class Document implements AutoCloseable {
     private Document(Database database, Path path) {
         this.database = database;
         this.path = path;
-        selectedConnector.addListener((obs, oldVal, newVal) -> recomputeDirty());
+        for (PluginKind kind : PluginKind.values()) {
+            StringProperty property = new SimpleStringProperty();
+            property.addListener((obs, oldVal, newVal) -> recomputeDirty());
+            selected.put(kind, property);
+            savedSettings.put(kind, new HashMap<>());
+            editSettings.put(kind, new HashMap<>());
+        }
     }
 
     /** Create a brand-new project file and open it as a document. */
@@ -89,10 +99,13 @@ public class Document implements AutoCloseable {
     /** (Re)load the editable state from disk and clear the dirty flag. */
     private void load() throws SQLException {
         this.name = database.getProjectName();
-        this.savedConnector = database.getMeta(KEY_CONNECTOR);
-        selectedConnector.set(savedConnector);
-        this.savedSettings = database.getAllConnectorSettings();
-        this.editSettings = deepCopy(savedSettings);
+        for (PluginKind kind : PluginKind.values()) {
+            String stored = database.getMeta(kind.label());
+            savedSelection.put(kind, stored);
+            selected.get(kind).set(stored);
+            savedSettings.put(kind, database.getAllSettings(kind));
+            editSettings.put(kind, deepCopy(savedSettings.get(kind)));
+        }
         this.savedScores = database.getAllItemScores();
         this.editScores = new HashMap<>(savedScores);
         dirty.set(false);
@@ -100,28 +113,30 @@ public class Document implements AutoCloseable {
 
     /** Persist the in-memory edits back to the SQLite file. */
     public void save() throws SQLException {
-        String value = selectedConnector.get();
-        database.putMeta(KEY_CONNECTOR, value);
-        savedConnector = value;
+        for (PluginKind kind : PluginKind.values()) {
+            String value = selected.get(kind).get();
+            database.putMeta(kind.label(), value);
+            savedSelection.put(kind, value);
 
-        // Upsert every current setting; delete any that were removed.
-        for (var connectorEntry : editSettings.entrySet()) {
-            for (var keyEntry : connectorEntry.getValue().entrySet()) {
-                database.putConnectorSetting(
-                        connectorEntry.getKey(), keyEntry.getKey(), keyEntry.getValue());
-            }
-        }
-        for (var connectorEntry : savedSettings.entrySet()) {
-            Map<String, String> current =
-                    editSettings.getOrDefault(connectorEntry.getKey(), Map.of());
-            for (String key : connectorEntry.getValue().keySet()) {
-                if (!current.containsKey(key)) {
-                    database.deleteConnectorSetting(connectorEntry.getKey(), key);
+            // Upsert every current setting; delete any that were removed.
+            Map<String, Map<String, String>> edits = editSettings.get(kind);
+            for (var nameEntry : edits.entrySet()) {
+                for (var keyEntry : nameEntry.getValue().entrySet()) {
+                    database.putSetting(
+                            kind, nameEntry.getKey(), keyEntry.getKey(), keyEntry.getValue());
                 }
             }
+            for (var nameEntry : savedSettings.get(kind).entrySet()) {
+                Map<String, String> current =
+                        edits.getOrDefault(nameEntry.getKey(), Map.of());
+                for (String key : nameEntry.getValue().keySet()) {
+                    if (!current.containsKey(key)) {
+                        database.deleteSetting(kind, nameEntry.getKey(), key);
+                    }
+                }
+            }
+            savedSettings.put(kind, deepCopy(edits));
         }
-
-        savedSettings = deepCopy(editSettings);
 
         // Same upsert-then-delete pass for the per-item scores.
         for (var entry : editScores.entrySet()) {
@@ -155,36 +170,44 @@ public class Document implements AutoCloseable {
         recomputeDirty();
     }
 
-    /** The in-memory value assigned to {@code key} of {@code connector} ({@code ""} if unset). */
-    public String getConnectorSetting(String connector, String key) {
-        Map<String, String> forConnector = editSettings.get(connector);
-        String value = forConnector == null ? null : forConnector.get(key);
+    /**
+     * The in-memory value assigned to {@code key} of the connector / exporter
+     * {@code name} ({@code ""} if unset).
+     */
+    public String getSetting(PluginKind kind, String name, String key) {
+        Map<String, String> forName = editSettings.get(kind).get(name);
+        String value = forName == null ? null : forName.get(key);
         return value == null ? "" : value;
     }
 
     /**
-     * Assign a value to {@code key} of {@code connector}. Blank values are
-     * treated as unset. Updates the {@link #dirtyProperty() dirty} flag.
+     * Assign a value to {@code key} of the connector / exporter {@code name}.
+     * Blank values are treated as unset. Updates the
+     * {@link #dirtyProperty() dirty} flag.
      */
-    public void setConnectorSetting(String connector, String key, String value) {
+    public void setSetting(PluginKind kind, String name, String key, String value) {
+        Map<String, Map<String, String>> edits = editSettings.get(kind);
         if (value == null || value.isEmpty()) {
-            Map<String, String> forConnector = editSettings.get(connector);
-            if (forConnector != null) {
-                forConnector.remove(key);
-                if (forConnector.isEmpty()) {
-                    editSettings.remove(connector);
+            Map<String, String> forName = edits.get(name);
+            if (forName != null) {
+                forName.remove(key);
+                if (forName.isEmpty()) {
+                    edits.remove(name);
                 }
             }
         } else {
-            editSettings.computeIfAbsent(connector, c -> new HashMap<>()).put(key, value);
+            edits.computeIfAbsent(name, n -> new HashMap<>()).put(key, value);
         }
         recomputeDirty();
     }
 
     private void recomputeDirty() {
-        dirty.set(!Objects.equals(selectedConnector.get(), savedConnector)
-                || !editSettings.equals(savedSettings)
-                || !editScores.equals(savedScores));
+        boolean changed = !editScores.equals(savedScores);
+        for (PluginKind kind : PluginKind.values()) {
+            changed |= !Objects.equals(selected.get(kind).get(), savedSelection.get(kind))
+                    || !editSettings.get(kind).equals(savedSettings.get(kind));
+        }
+        dirty.set(changed);
     }
 
     private static Map<String, Map<String, String>> deepCopy(
@@ -204,8 +227,9 @@ public class Document implements AutoCloseable {
         return path;
     }
 
-    public StringProperty selectedConnectorProperty() {
-        return selectedConnector;
+    /** The selected connector / exporter name, two-way bound to the top bar. */
+    public StringProperty selectedProperty(PluginKind kind) {
+        return selected.get(kind);
     }
 
     public boolean isDirty() {

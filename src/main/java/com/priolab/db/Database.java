@@ -1,6 +1,7 @@
 package com.priolab.db;
 
 import com.priolab.model.ItemScore;
+import com.priolab.model.PluginKind;
 
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -59,6 +60,10 @@ public class Database implements AutoCloseable {
                             + "connector TEXT NOT NULL, key TEXT NOT NULL, value TEXT, "
                             + "PRIMARY KEY (connector, key))");
             st.executeUpdate(
+                    "CREATE TABLE IF NOT EXISTS exporter_settings ("
+                            + "exporter TEXT NOT NULL, key TEXT NOT NULL, value TEXT, "
+                            + "PRIMARY KEY (exporter, key))");
+            st.executeUpdate(
                     "CREATE TABLE IF NOT EXISTS item_scores ("
                             + "id TEXT PRIMARY KEY, "
                             + "business_value INTEGER, time_criticality INTEGER, "
@@ -97,18 +102,18 @@ public class Database implements AutoCloseable {
     }
 
     /**
-     * Read every stored connector setting, grouped by connector name:
-     * {@code connector -> (key -> value)}. Returns an empty map if the database
-     * is not open.
+     * Read every stored setting of one {@link PluginKind}, grouped by the
+     * connector / exporter name: {@code name -> (key -> value)}. Returns an
+     * empty map if the database is not open.
      */
-    public Map<String, Map<String, String>> getAllConnectorSettings() throws SQLException {
+    public Map<String, Map<String, String>> getAllSettings(PluginKind kind) throws SQLException {
         Map<String, Map<String, String>> out = new HashMap<>();
         if (connection == null) {
             return out;
         }
         try (Statement st = connection.createStatement();
              ResultSet rs = st.executeQuery(
-                     "SELECT connector, key, value FROM connector_settings")) {
+                     "SELECT " + kind.label() + ", key, value FROM " + settingsTable(kind))) {
             while (rs.next()) {
                 out.computeIfAbsent(rs.getString(1), k -> new HashMap<>())
                         .put(rs.getString(2), rs.getString(3));
@@ -117,27 +122,38 @@ public class Database implements AutoCloseable {
         return out;
     }
 
-    /** Insert or update a single connector setting value. */
-    public void putConnectorSetting(String connector, String key, String value)
+    /** Insert or update a single connector / exporter setting value. */
+    public void putSetting(PluginKind kind, String name, String key, String value)
             throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO connector_settings(connector, key, value) VALUES(?, ?, ?) "
-                        + "ON CONFLICT(connector, key) DO UPDATE SET value = excluded.value")) {
-            ps.setString(1, connector);
+                "INSERT INTO " + settingsTable(kind) + "(" + kind.label() + ", key, value) "
+                        + "VALUES(?, ?, ?) ON CONFLICT(" + kind.label() + ", key) "
+                        + "DO UPDATE SET value = excluded.value")) {
+            ps.setString(1, name);
             ps.setString(2, key);
             ps.setString(3, value);
             ps.executeUpdate();
         }
     }
 
-    /** Remove a stored connector setting, if present. */
-    public void deleteConnectorSetting(String connector, String key) throws SQLException {
+    /** Remove a stored connector / exporter setting, if present. */
+    public void deleteSetting(PluginKind kind, String name, String key) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement(
-                "DELETE FROM connector_settings WHERE connector = ? AND key = ?")) {
-            ps.setString(1, connector);
+                "DELETE FROM " + settingsTable(kind)
+                        + " WHERE " + kind.label() + " = ? AND key = ?")) {
+            ps.setString(1, name);
             ps.setString(2, key);
             ps.executeUpdate();
         }
+    }
+
+    /**
+     * The settings table of a kind. Both the table and its first column are
+     * named after the kind, and the name never comes from user input, so it is
+     * safe to splice into the SQL above (JDBC cannot parameterize identifiers).
+     */
+    private static String settingsTable(PluginKind kind) {
+        return kind.label() + "_settings";
     }
 
     /**

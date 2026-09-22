@@ -19,12 +19,18 @@
 
     <Label text="Welcome to PrioLab" styleClass="title"/>
     <Label styleClass="subtitle" wrapText="true"
-           text="Let's set things up. PrioLab uses connectors — small external programs that feed it things to prioritize. Choose the directory where your connectors live."/>
+           text="Let's set things up. PrioLab uses small external programs: connectors feed it the things to prioritize, and exporters take the prioritized result back out. Choose the directories where each of them lives."/>
 
     <Label text="Connectors directory"/>
     <HBox spacing="8">
         <TextField fx:id="connectorsDirField" HBox.hgrow="ALWAYS"/>
-        <Button text="Browse…" onAction="#onBrowse"/>
+        <Button text="Browse…" onAction="#onBrowseConnectors"/>
+    </HBox>
+
+    <Label text="Exporters directory"/>
+    <HBox spacing="8">
+        <TextField fx:id="exportersDirField" HBox.hgrow="ALWAYS"/>
+        <Button text="Browse…" onAction="#onBrowseExporters"/>
     </HBox>
 
     <Region VBox.vgrow="ALWAYS"/>

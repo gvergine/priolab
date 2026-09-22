@@ -11,7 +11,7 @@
 
 <BorderPane xmlns="http://javafx.com/javafx"
             xmlns:fx="http://javafx.com/fxml"
-            fx:controller="com.priolab.controller.ConnectorSettingsController"
+            fx:controller="com.priolab.controller.PluginSettingsController"
             styleClass="dialog">
     <top>
         <VBox spacing="4">
@@ -19,8 +19,7 @@
                 <Insets top="20" right="24" bottom="8" left="24"/>
             </padding>
             <Label fx:id="headerLabel" styleClass="section-title"/>
-            <Label styleClass="subtitle" wrapText="true"
-                   text="Assign values to this connector's settings. They are saved into the project file."/>
+            <Label fx:id="subtitleLabel" styleClass="subtitle" wrapText="true"/>
         </VBox>
     </top>
 
@@ -32,7 +31,7 @@
                         <Insets top="8" right="24" bottom="8" left="24"/>
                     </padding>
                     <Label fx:id="emptyHint" styleClass="placeholder" wrapText="true"
-                           text="This connector declares no settings." visible="false" managed="false"/>
+                           visible="false" managed="false"/>
                 </VBox>
             </content>
         </ScrollPane>

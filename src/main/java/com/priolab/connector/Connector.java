@@ -4,6 +4,9 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.Writer;
+import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -21,11 +24,12 @@ import java.util.function.IntConsumer;
  * <p>PrioLab runs the connector by launching the manifest's
  * {@link ConnectorManifest#getCommand() command} as a child process, with the
  * connector directory as the working directory and the per-project setting
- * values as environment variables. There is no handshake: the connector simply
- * prints its result on stdout and exits. stdout and stderr are streamed
- * separately, line by line, because stdout carries the result while stderr is
- * only diagnostics for the console pane. This class deals with process
- * lifecycle and streaming, nothing else.
+ * values as environment variables. There is no handshake: a connector
+ * (importer) simply prints its result on stdout, while an exporter is fed the
+ * prioritized items on stdin. stdout and stderr are streamed separately, line
+ * by line, because stdout carries the result while stderr is only diagnostics
+ * for the console pane. This class deals with process lifecycle and streaming,
+ * nothing else — it is the same for both kinds of program.
  */
 public class Connector implements AutoCloseable {
 
@@ -83,6 +87,23 @@ public class Connector implements AutoCloseable {
                                  Consumer<String> onLine,
                                  Consumer<String> onErrorLine,
                                  IntConsumer onExit) throws IOException {
+        run(env, null, onLine, onErrorLine, onExit);
+    }
+
+    /**
+     * As {@link #run(Map, Consumer, Consumer, IntConsumer)}, but first write
+     * {@code input} to the child's stdin, one line each, and close it. The
+     * writing happens on its own daemon thread, so a child that only reads part
+     * of its input (or none) cannot block PrioLab.
+     *
+     * @param input the lines to feed to stdin, or {@code null} to close it right
+     *              away (what a connector run does)
+     */
+    public synchronized void run(Map<String, String> env,
+                                 List<String> input,
+                                 Consumer<String> onLine,
+                                 Consumer<String> onErrorLine,
+                                 IntConsumer onExit) throws IOException {
         if (isRunning()) {
             throw new IllegalStateException("Connector already running: " + getName());
         }
@@ -92,10 +113,13 @@ public class Connector implements AutoCloseable {
         process = pb.start();
 
         Process started = process;
-        try {
-            started.getOutputStream().close();
-        } catch (IOException ignored) {
-            // The child may already be gone; its stdin is of no use to us.
+        if (input == null) {
+            closeQuietly(started.getOutputStream());
+        } else {
+            Thread writer = new Thread(() -> writeLines(started, input, onErrorLine),
+                    "connector-" + getName() + "-stdin");
+            writer.setDaemon(true);
+            writer.start();
         }
 
         Thread stderrReader = new Thread(
@@ -177,6 +201,30 @@ public class Connector implements AutoCloseable {
         }
         if (onExit != null) {
             onExit.accept(code);
+        }
+    }
+
+    /**
+     * Write every line of {@code input} to the child's stdin and close it, so
+     * the program sees end-of-file and can finish. A child that exits early
+     * leaves us with a broken pipe; that is normal, not an error worth raising.
+     */
+    private static void writeLines(Process p, List<String> input, Consumer<String> onErrorLine) {
+        try (Writer out = new OutputStreamWriter(p.getOutputStream(), StandardCharsets.UTF_8)) {
+            for (String line : input) {
+                out.write(line);
+                out.write('\n');
+            }
+        } catch (IOException e) {
+            onErrorLine.accept("[stopped writing to stdin: " + e.getMessage() + "]");
+        }
+    }
+
+    private static void closeQuietly(OutputStream stream) {
+        try {
+            stream.close();
+        } catch (IOException ignored) {
+            // The child may already be gone; its stdin is of no use to us.
         }
     }
 

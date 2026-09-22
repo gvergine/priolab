@@ -2,12 +2,15 @@ package com.priolab.controller;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.priolab.App;
 import com.priolab.config.ConfigManager;
 import com.priolab.connector.Connector;
 import com.priolab.connector.ConnectorManager;
 import com.priolab.doc.Document;
+import com.priolab.model.PluginKind;
 import com.priolab.model.PrioItem;
+import com.priolab.model.ScoredItem;
 import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
@@ -33,6 +36,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -42,6 +46,13 @@ import java.util.Optional;
  * Main window controller. Owns the currently open {@link Document}, drives the
  * File menu (new/open/save) and keeps the title/status in sync, prompting to
  * save whenever unsaved edits would be lost.
+ *
+ * <p>It also owns the top bar's two program groups — the <b>connector</b>
+ * (Import) and the <b>exporter</b> (Export). Both are discovered the same way
+ * from their own configured directory, and both are launched with their
+ * per-project settings in the environment; they differ only in the direction
+ * the items flow: a connector prints them on stdout, an exporter is fed them on
+ * stdin (see {@link PluginKind}).
  */
 public class MainController {
 
@@ -52,23 +63,37 @@ public class MainController {
     @FXML
     private TextArea logArea;
     @FXML
-    private Button runButton;
+    private Button importButton;
     @FXML
     private Button connectorSettingsButton;
     @FXML
-    private ProgressIndicator runProgress;
+    private ProgressIndicator importProgress;
     @FXML
     private HBox connectorBar;
     @FXML
     private ComboBox<String> connectorCombo;
+    @FXML
+    private Button exportButton;
+    @FXML
+    private Button exporterSettingsButton;
+    @FXML
+    private ProgressIndicator exportProgress;
+    @FXML
+    private HBox exporterBar;
+    @FXML
+    private ComboBox<String> exporterCombo;
 
     private App app;
     private ConfigManager configManager;
-    private ConnectorManager connectorManager;
+
+    /** One discovery manager per kind, over its own configured directory. */
+    private final Map<PluginKind, ConnectorManager> managers = new EnumMap<>(PluginKind.class);
+
+    /** The process currently running for each kind, if any. */
+    private final Map<PluginKind, Connector> running = new EnumMap<>(PluginKind.class);
 
     private Document document;
     private DocumentController documentController;
-    private Connector runningConnector;
 
     private final ObjectMapper jsonMapper = new ObjectMapper();
 
@@ -83,9 +108,12 @@ public class MainController {
         this.app = app;
         this.configManager = configManager;
         String connectorsDir = configManager.get().getConnectorsDir();
-        this.connectorManager = new ConnectorManager(
-                connectorsDir == null ? null : Paths.get(connectorsDir));
-        setStatus("Ready — connectors: " + connectorsDir);
+        String exportersDir = configManager.get().getExportersDir();
+        managers.put(PluginKind.CONNECTOR, new ConnectorManager(
+                connectorsDir == null ? null : Paths.get(connectorsDir)));
+        managers.put(PluginKind.EXPORTER, new ConnectorManager(
+                exportersDir == null ? null : Paths.get(exportersDir)));
+        setStatus("Ready — connectors: " + connectorsDir + " · exporters: " + exportersDir);
     }
 
     @FXML
@@ -184,10 +212,10 @@ public class MainController {
 
     /** Release resources: stop any running connector and close the document. */
     private void shutdown() {
-        if (runningConnector != null) {
-            runningConnector.close();
-            runningConnector = null;
+        for (Connector plugin : running.values()) {
+            plugin.close();
         }
+        running.clear();
         if (document != null) {
             document.close();
         }
@@ -204,28 +232,14 @@ public class MainController {
         alert.showAndWait();
     }
 
+    /** Run the selected connector and load what it prints into the tables. */
     @FXML
-    private void onRunConnector() {
-        if (document == null) {
-            setStatus("Open or create a project first.");
-            return;
-        }
-        String name = document.selectedConnectorProperty().get();
-        if (name == null || name.isBlank()) {
-            setStatus("Select a connector to run.");
-            return;
-        }
-        if (runningConnector != null && runningConnector.isRunning()) {
-            setStatus("A connector is already running.");
-            return;
-        }
-        Connector connector = findConnector(name);
+    private void onImport() {
+        Connector connector = selectedPlugin(PluginKind.CONNECTOR);
         if (connector == null) {
-            error("Connector not found: " + name
-                    + "\nIt may have been removed or its manifest is invalid.");
             return;
         }
-        appendLog("$ " + name + " — " + connector.getManifest().getCommand());
+        appendLog("$ " + connector.getName() + " — " + connector.getManifest().getCommand());
 
         // Reset the parse state and clear any previously loaded items.
         runPhase = RunPhase.AWAIT_COUNT;
@@ -235,8 +249,8 @@ public class MainController {
             documentController.setItems(List.of());
         }
 
-        Map<String, String> env = buildEnvironment(connector);
-        env.forEach((key, value) -> appendLog("  " + key + "=" + value));
+        Map<String, String> env = buildEnvironment(PluginKind.CONNECTOR, connector);
+        logEnvironment(env);
         try {
             connector.run(
                     env,
@@ -244,17 +258,111 @@ public class MainController {
                     line -> Platform.runLater(() -> appendLog(line)),
                     code -> Platform.runLater(() -> {
                         appendLog("[exited with code " + code + "]");
-                        runningConnector = null;
+                        running.remove(PluginKind.CONNECTOR);
                         runPhase = RunPhase.IDLE;
-                        setRunning(false);
+                        setRunning(PluginKind.CONNECTOR, false);
                     }));
-            runningConnector = connector;
-            setRunning(true);
-            setStatus("Running connector: " + name);
+            running.put(PluginKind.CONNECTOR, connector);
+            setRunning(PluginKind.CONNECTOR, true);
+            setStatus("Importing with connector: " + connector.getName());
         } catch (Exception e) {
             error("Failed to run connector:\n" + e.getMessage());
             runPhase = RunPhase.IDLE;
         }
+    }
+
+    /**
+     * Run the selected exporter, feeding it the items currently shown — in
+     * priority order — as one JSON object per line on its stdin. Each object
+     * carries the item as the connector delivered it plus the four WSJF inputs
+     * and the computed WSJF ({@code null} while a score is blank).
+     */
+    @FXML
+    private void onExport() {
+        Connector exporter = selectedPlugin(PluginKind.EXPORTER);
+        if (exporter == null) {
+            return;
+        }
+        List<ScoredItem> items = documentController == null
+                ? List.of() : documentController.getPrioritizedItems();
+        if (items.isEmpty()) {
+            setStatus("Nothing to export — import some items first.");
+            return;
+        }
+        List<String> lines = new ArrayList<>(items.size());
+        for (ScoredItem item : items) {
+            lines.add(toExportJson(item));
+        }
+
+        appendLog("$ " + exporter.getName() + " — " + exporter.getManifest().getCommand());
+        Map<String, String> env = buildEnvironment(PluginKind.EXPORTER, exporter);
+        logEnvironment(env);
+        appendLog("[writing " + lines.size() + " item(s) to stdin]");
+        try {
+            exporter.run(
+                    env,
+                    lines,
+                    line -> Platform.runLater(() -> appendLog(line)),
+                    line -> Platform.runLater(() -> appendLog(line)),
+                    code -> Platform.runLater(() -> {
+                        appendLog("[exited with code " + code + "]");
+                        running.remove(PluginKind.EXPORTER);
+                        setRunning(PluginKind.EXPORTER, false);
+                        setStatus(code == 0
+                                ? "Exported " + lines.size() + " item(s)."
+                                : "Exporter failed with exit code " + code + ".");
+                    }));
+            running.put(PluginKind.EXPORTER, exporter);
+            setRunning(PluginKind.EXPORTER, true);
+            setStatus("Exporting with: " + exporter.getName());
+        } catch (Exception e) {
+            error("Failed to run exporter:\n" + e.getMessage());
+        }
+    }
+
+    /**
+     * The connector / exporter the user picked, or {@code null} (with a status
+     * message) when there is nothing to run: no project, no selection, one
+     * already running, or a name that no longer resolves.
+     */
+    private Connector selectedPlugin(PluginKind kind) {
+        if (document == null) {
+            setStatus("Open or create a project first.");
+            return null;
+        }
+        String name = document.selectedProperty(kind).get();
+        if (name == null || name.isBlank()) {
+            setStatus("Select a " + kind.label() + " to run.");
+            return null;
+        }
+        Connector current = running.get(kind);
+        if (current != null && current.isRunning()) {
+            setStatus("A " + kind.label() + " is already running.");
+            return null;
+        }
+        Connector plugin = findPlugin(kind, name);
+        if (plugin == null) {
+            error(kind.label() + " not found: " + name
+                    + "\nIt may have been removed or its manifest is invalid.");
+        }
+        return plugin;
+    }
+
+    /** One JSON line for an exporter: the item, its four inputs and its WSJF. */
+    private String toExportJson(ScoredItem scored) {
+        PrioItem item = scored.item();
+        ObjectNode node = jsonMapper.createObjectNode();
+        node.put("id", item.id());
+        node.put("description", item.description());
+        node.put("url", item.url());
+        node.put("businessValue", scored.businessValueProperty().get());
+        node.put("timeCriticality", scored.timeCriticalityProperty().get());
+        node.put("riskReduction", scored.riskReductionProperty().get());
+        node.put("jobSize", scored.jobSizeProperty().get());
+        Double wsjf = scored.getWsjf();
+        // Two decimals, exactly the value the result table shows.
+        node.put("wsjf", wsjf == null ? null : Math.round(wsjf * 100) / 100.0);
+        return node.toString();
     }
 
     /**
@@ -328,30 +436,42 @@ public class MainController {
     }
 
     /**
-     * The environment the connector's command is launched with: one variable per
-     * manifest key, named exactly like the key and holding the value configured
-     * for this project (empty when the user has not set one). They are added to
-     * the environment PrioLab itself was started with.
+     * The environment the command is launched with: one variable per manifest
+     * key, named exactly like the key and holding the value configured for this
+     * project (empty when the user has not set one). They are added to the
+     * environment PrioLab itself was started with.
      */
-    private Map<String, String> buildEnvironment(Connector connector) {
+    private Map<String, String> buildEnvironment(PluginKind kind, Connector plugin) {
         Map<String, String> env = new LinkedHashMap<>();
-        for (String key : connector.getKeys()) {
-            String value = document.getConnectorSetting(connector.getName(), key);
+        for (String key : plugin.getKeys()) {
+            String value = document.getSetting(kind, plugin.getName(), key);
             env.put(key, value == null ? "" : value);
         }
         return env;
     }
 
+    private void logEnvironment(Map<String, String> env) {
+        env.forEach((key, value) -> appendLog("  " + key + "=" + value));
+    }
+
     /**
-     * Reflect the connector run state in the UI: while running, disable the
-     * connector inputs and show the spinning indeterminate progress indicator.
+     * Reflect a run in the UI: while the program runs, disable that group's
+     * inputs and show its spinning indeterminate progress indicator.
      */
-    private void setRunning(boolean running) {
-        runButton.setDisable(running);
-        connectorCombo.setDisable(running);
-        connectorSettingsButton.setDisable(running);
-        runProgress.setVisible(running);
-        runProgress.setManaged(running);
+    private void setRunning(PluginKind kind, boolean busy) {
+        if (kind == PluginKind.CONNECTOR) {
+            importButton.setDisable(busy);
+            connectorCombo.setDisable(busy);
+            connectorSettingsButton.setDisable(busy);
+            importProgress.setVisible(busy);
+            importProgress.setManaged(busy);
+        } else {
+            exportButton.setDisable(busy);
+            exporterCombo.setDisable(busy);
+            exporterSettingsButton.setDisable(busy);
+            exportProgress.setVisible(busy);
+            exportProgress.setManaged(busy);
+        }
     }
 
     @FXML
@@ -362,53 +482,61 @@ public class MainController {
     /** Open the modal dialog to edit the selected connector's setting values. */
     @FXML
     private void onConnectorSettings() {
+        openSettings(PluginKind.CONNECTOR);
+    }
+
+    /** Open the modal dialog to edit the selected exporter's setting values. */
+    @FXML
+    private void onExporterSettings() {
+        openSettings(PluginKind.EXPORTER);
+    }
+
+    private void openSettings(PluginKind kind) {
         if (document == null) {
+            setStatus("Open or create a project first.");
             return;
         }
-        String name = connectorCombo.getValue();
+        String name = document.selectedProperty(kind).get();
         if (name == null || name.isBlank()) {
-            setStatus("Select a connector to configure.");
+            setStatus("Select a " + kind.label() + " to configure.");
             return;
         }
-        Connector connector = findConnector(name);
-        if (connector == null) {
-            error("Connector not found: " + name
+        Connector plugin = findPlugin(kind, name);
+        if (plugin == null) {
+            error(kind.label() + " not found: " + name
                     + "\nIt may have been removed or its manifest is invalid.");
             return;
         }
         try {
             FXMLLoader loader = new FXMLLoader(getClass().getResource(
-                    "/com/priolab/fxml/connectorsettings.fxml"));
+                    "/com/priolab/fxml/pluginsettings.fxml"));
             Parent root = loader.load();
-            ConnectorSettingsController controller = loader.getController();
+            PluginSettingsController controller = loader.getController();
 
             Stage dialog = new Stage();
             dialog.initOwner(app.getStage());
             dialog.initModality(Modality.APPLICATION_MODAL);
-            dialog.setTitle("Connector Settings");
+            dialog.setTitle(kind == PluginKind.CONNECTOR
+                    ? "Connector Settings" : "Exporter Settings");
             App.applyIcon(dialog);
             Scene scene = new Scene(root, 420, 380);
             scene.getStylesheets().add(
                     getClass().getResource("/com/priolab/css/app.css").toExternalForm());
             dialog.setScene(scene);
             controller.setStage(dialog);
-            controller.init(document, connector);
+            controller.init(document, kind, plugin);
             dialog.showAndWait();
         } catch (IOException e) {
-            error("Failed to open connector settings:\n" + e.getMessage());
+            error("Failed to open " + kind.label() + " settings:\n" + e.getMessage());
         }
     }
 
-    private Connector findConnector(String name) {
-        try {
-            return connectorManager.discover().stream()
-                    .filter(c -> c.getName().equals(name))
-                    .findFirst()
-                    .orElse(null);
-        } catch (IOException e) {
-            error("Failed to list connectors:\n" + e.getMessage());
-            return null;
-        }
+    /** Look up one connector / exporter by name in its own directory. */
+    private Connector findPlugin(PluginKind kind, String name) {
+        return plugins(kind).stream()
+                .filter(c -> c.getName().equals(name))
+                .findFirst()
+                .orElse(null);
     }
 
     private void appendLog(String line) {
@@ -421,7 +549,9 @@ public class MainController {
     private void adoptDocument(Document next) {
         if (document != null) {
             connectorCombo.valueProperty().unbindBidirectional(
-                    document.selectedConnectorProperty());
+                    document.selectedProperty(PluginKind.CONNECTOR));
+            exporterCombo.valueProperty().unbindBidirectional(
+                    document.selectedProperty(PluginKind.EXPORTER));
             document.close();
         }
         document = next;
@@ -437,11 +567,15 @@ public class MainController {
             return;
         }
 
-        // Populate and bind the connector selector in the top bar.
-        connectorCombo.getItems().setAll(connectorNames());
+        // Populate and bind the two selectors in the top bar.
+        connectorCombo.getItems().setAll(pluginNames(PluginKind.CONNECTOR));
         connectorCombo.valueProperty().bindBidirectional(
-                document.selectedConnectorProperty());
+                document.selectedProperty(PluginKind.CONNECTOR));
+        exporterCombo.getItems().setAll(pluginNames(PluginKind.EXPORTER));
+        exporterCombo.valueProperty().bindBidirectional(
+                document.selectedProperty(PluginKind.EXPORTER));
         connectorBar.setDisable(false);
+        exporterBar.setDisable(false);
 
         document.dirtyProperty().addListener((obs, was, dirty) -> updateTitle());
         updateTitle();
@@ -487,15 +621,16 @@ public class MainController {
         return true; // NO -> discard
     }
 
-    private List<String> connectorNames() {
-        return connectors().stream().map(Connector::getName).toList();
+    private List<String> pluginNames(PluginKind kind) {
+        return plugins(kind).stream().map(Connector::getName).toList();
     }
 
-    private List<Connector> connectors() {
+    /** Every valid connector / exporter found in that kind's directory. */
+    private List<Connector> plugins(PluginKind kind) {
         try {
-            return connectorManager.discover();
+            return managers.get(kind).discover();
         } catch (IOException e) {
-            error("Failed to list connectors:\n" + e.getMessage());
+            error("Failed to list " + kind.label() + "s:\n" + e.getMessage());
             return List.of();
         }
     }

@@ -3,7 +3,8 @@
 A JavaFX desktop application that helps the user prioritize *anything*. The
 things to prioritize come from **connectors** — external programs PrioLab runs
 with the project's settings in the environment, reading their result on
-stdout.
+stdout. The prioritized result goes back out through **exporters**, the same
+kind of program driven in the opposite direction.
 
 ## Tech stack
 
@@ -65,19 +66,29 @@ access on the first run.
 ### First run / configuration
 On startup PrioLab looks for `~/.priolab/config.json`:
 - **Missing** → treated as a fresh install. The **wizard** (`wizard.fxml` /
-  `WizardController`) asks for the **connectors directory** and writes
-  `config.json`.
-- **Present** → loaded, then the **main window** (`main.fxml` /
+  `WizardController`) asks for the **connectors** and **exporters** directories
+  and writes `config.json`.
+- **Present but without `exportersDir`** (a config written before exporters
+  existed) → the wizard runs again, prefilled with what is already configured,
+  so the missing directory can be filled in.
+- **Complete** → loaded, then the **main window** (`main.fxml` /
   `MainController`) opens.
 
 `config.json` schema (see `config/Config.java`):
 ```json
-{ "version": 1, "connectorsDir": "/home/user/.priolab/connectors" }
+{
+  "version": 1,
+  "connectorsDir": "/home/user/.priolab/connectors",
+  "exportersDir": "/home/user/.priolab/exporters"
+}
 ```
 
-### Connectors
-A connector is a **direct subdirectory** of the connectors directory; the
-**directory name is the connector name**. A subdirectory is a valid connector
+### Connectors & exporters
+A connector (the **importer**) and an exporter are the *same kind of thing* —
+`model/PluginKind.java` names the two roles, and one `connector/Connector.java`
+implements both. Each is a **direct subdirectory** of its own configured
+directory (`connectorsDir` / `exportersDir`); the **directory name is the
+program's name**. A subdirectory is a valid connector
 only if it contains a **`manifest.json`** (`connector/ConnectorManifest.java`,
 Jackson-mapped) with:
 - `name` (string, **must equal the directory name**),
@@ -91,6 +102,7 @@ Jackson-mapped) with:
 `ConnectorManager.discover()` scans the direct subdirectories, parses/validates
 each `manifest.json`, and **skips invalid ones** (writing a note to stderr:
 missing manifest, name mismatch, or missing version/author/description/command).
+`MainController` keeps **one manager per kind**, each over its own directory.
 
 **Running:** `Connector.run(env, onLine, onErrorLine, onExit)` launches the
 manifest `command` as a child process with the connector directory as the
@@ -146,15 +158,57 @@ for item in items:
     print(json.dumps(item), flush=True)
 ```
 
+**Export protocol.** `MainController.onExport()` is the mirror image:
+
+1. The exporter's command is launched exactly like a connector's — same
+   directory rules, same **environment variables** from its own manifest keys
+   and its own per-project settings.
+2. PrioLab then writes the items **currently shown**, in **priority order**
+   (the result table's order: WSJF descending, unscored last), **one JSON
+   object per line on the exporter's stdin**, and **closes stdin** so the
+   program sees end-of-file. There is no count line — the line order *is* the
+   priority.
+3. Its stdout and stderr are only logged to the console pane; PrioLab parses
+   nothing back.
+
+Each exported line carries the item as the connector delivered it plus the four
+WSJF inputs and the computed value (`null` wherever a dropdown is blank, and
+`wsjf` rounded to the two decimals the table shows):
+
+```json
+{"id":"A-1","description":"…","url":"…","businessValue":8,"timeCriticality":5,
+ "riskReduction":3,"jobSize":3,"wsjf":5.33}
+```
+
+Writing happens on its own daemon thread, so an exporter that reads only part of
+its input (or none) cannot block PrioLab; a broken pipe is reported in the log,
+not raised. **Export** is a no-op with a status message when nothing has been
+imported yet.
+
+A minimal exporter is therefore just:
+
+```python
+#!/usr/bin/env python3
+import json, os, sys
+with open(os.getenv("outfile"), "w") as out:
+    for line in sys.stdin:
+        item = json.loads(line)
+        out.write(f"{item['id']},{item['wsjf']}\n")
+```
+
 ### SQLite
 `File ▸ Open…` / `File ▸ Save…` in the main window open/create a `.sqlite3`
 (also `.sqlite`, `.db`) file via `db/Database.java` (JDBC, `jdbc:sqlite:`). The
 driver is loaded through the JDBC `ServiceLoader`, so no explicit
 `requires org.xerial.sqlitejdbc` in `module-info` — only `requires java.sql`.
 `Database` also exposes a small `meta(key, value)` key/value table
-(`ensureSchema`, `getMeta`, `putMeta`) used to store project metadata, plus the
-`connector_settings(connector, key, value)` and `item_scores(id, business_value,
-time_criticality, risk_reduction, job_size)` tables. `ensureSchema()` is
+(`ensureSchema`, `getMeta`, `putMeta`) used to store project metadata, plus
+`connector_settings(connector, key, value)`,
+`exporter_settings(exporter, key, value)` and `item_scores(id, business_value,
+time_criticality, risk_reduction, job_size)`. The two settings tables are
+reached through one `PluginKind`-parameterized trio
+(`getAllSettings` / `putSetting` / `deleteSetting`), so a connector and an
+exporter that share a name keep separate settings. `ensureSchema()` is
 `CREATE TABLE IF NOT EXISTS` throughout, so opening an older project file just
 adds the missing tables.
 
@@ -176,21 +230,23 @@ the factories; `save()` writes back and clears dirty.
 `MainController` owns the current `Document` and hosts the editor view
 (`document.fxml` / `DocumentController`) inside the center `contentPane`.
 
-**Connector selection & settings live in the top bar** (an `HBox` alongside the
-`MenuBar`), owned by `MainController`, not the document view:
-- a `ComboBox` of the currently loaded connector names
-  (`ConnectorManager.discover()`), two-way bound to
-  `Document.selectedConnectorProperty()` and persisted to `meta["connector"]`;
-- a **⚙ settings button** that opens a modal dialog (`connectorsettings.fxml` /
-  `ConnectorSettingsController`) with one text field per manifest **key**, seeded
-  from and (on OK) written back into the document. These per-connector key values
-  are persisted in the `connector_settings(connector, key, value)` table and
-  tracked by `Document` (`getConnectorSetting` / `setConnectorSetting`, folded
-  into the `dirty` flag). They are the **environment variables** the connector
-  command is launched with;
-- the **Run** button and its progress spinner.
+**Connector and exporter selection & settings live in the top bar** (an `HBox`
+alongside the `MenuBar`), owned by `MainController`, not the document view. It
+holds **two identical groups**, connector first, exporter after a separator:
+- a `ComboBox` of that kind's discovered names, two-way bound to
+  `Document.selectedProperty(kind)` and persisted to `meta["connector"]` /
+  `meta["exporter"]`;
+- a **⚙ settings button** that opens a modal dialog (`pluginsettings.fxml` /
+  `PluginSettingsController`, shared by both kinds) with one text field per
+  manifest **key**, seeded from and (on OK) written back into the document.
+  These key values are persisted per kind (see *SQLite*) and tracked by
+  `Document` (`getSetting` / `setSetting`, folded into the `dirty` flag). They
+  are the **environment variables** the command is launched with;
+- the action button — **Import** for the connector, **Export** for the exporter
+  — and its own progress spinner. While one runs, only that group's inputs are
+  disabled; the other kind refuses to start with a status message.
 
-The whole connector bar is disabled until a project is open.
+Both bars are disabled until a project is open.
 
 **Center view** (`DocumentController`) is a **horizontal `SplitPane`** of two
 `TableView`s over `model/ScoredItem.java` (a `PrioItem` plus editable WSJF
@@ -256,24 +312,25 @@ src/main/java/com/priolab/
   App.java                         Application entry; chooses wizard vs main
   config/Config.java               config.json POJO
   config/ConfigManager.java        load/save ~/.priolab/config.json (Jackson)
-  connector/Connector.java         one connector dir: manifest + child process (env in, stdout out)
+  connector/Connector.java         one connector/exporter dir: manifest + child process
   connector/ConnectorManifest.java manifest.json POJO (name/version/author/…/keys)
   connector/ConnectorManager.java  discover connector subdirs in the config'd dir
   controller/WizardController.java first-run wizard
   controller/NewProjectController.java  modal "new project" wizard
-  controller/ConnectorSettingsController.java  modal connector-key editor
-  controller/MainController.java   main window, top bar, run protocol, current Document
+  controller/PluginSettingsController.java  modal key editor (connector or exporter)
+  controller/MainController.java   main window, top bar, import/export runs, current Document
   controller/DocumentController.java    center split view: WSJF scoring + result tables
   doc/Document.java                open project: DB + editable state + dirty
-  db/Database.java                 SQLite JDBC wrapper + meta / connector_settings
+  db/Database.java                 SQLite JDBC wrapper + meta / per-kind settings / scores
   model/PrioItem.java              one item to prioritize (id/description/url)
   model/ScoredItem.java            PrioItem + WSJF inputs + computed WSJF
   model/ItemScore.java             the four stored WSJF inputs, keyed by item id
+  model/PluginKind.java            CONNECTOR (importer) vs EXPORTER
 src/main/resources/com/priolab/
   img/priolab.png                  256x256 app icon (stage, jpackage, AppImage)
   fxml/wizard.fxml
   fxml/newproject.fxml
-  fxml/connectorsettings.fxml
+  fxml/pluginsettings.fxml
   fxml/main.fxml
   fxml/document.fxml
   css/app.css
@@ -301,6 +358,11 @@ src/main/resources/com/priolab/
 
 - Keep the app modular — new packages that FXML or Jackson touch by reflection need
   matching `opens` in `module-info.java`.
-- The connector contract is *environment variables in, stdout out*. Keep it
-  that way: no stdin traffic, no handshake, nothing parsed out of stderr.
+- The connector contract is *environment variables in, stdout out*; the exporter
+  contract is *environment variables in, JSON lines down stdin*. Keep them that
+  way: no handshake, nothing parsed out of stderr, nothing read back from an
+  exporter.
+- Connectors and exporters stay interchangeable in everything but direction —
+  same manifest, same discovery, same settings dialog. Anything new that applies
+  to one should be expressed per `PluginKind` rather than duplicated.
 - Pin dependency versions in the `ext { }` block in `build.gradle`.

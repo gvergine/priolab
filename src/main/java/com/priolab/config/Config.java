@@ -10,6 +10,9 @@ public class Config {
     /** Absolute path to the directory that holds connector subdirectories. */
     private String connectorsDir;
 
+    /** Absolute path to the directory that holds exporter subdirectories. */
+    private String exportersDir;
+
     public int getVersion() {
         return version;
     }
@@ -24,5 +27,13 @@ public class Config {
 
     public void setConnectorsDir(String connectorsDir) {
         this.connectorsDir = connectorsDir;
+    }
+
+    public String getExportersDir() {
+        return exportersDir;
+    }
+
+    public void setExportersDir(String exportersDir) {
+        this.exportersDir = exportersDir;
     }
 }

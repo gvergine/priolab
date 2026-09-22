@@ -102,6 +102,14 @@ public class DocumentController {
         resortRight();
     }
 
+    /**
+     * The items as the result table shows them: WSJF descending, unscored last.
+     * This is what an export writes out, in this order.
+     */
+    public List<ScoredItem> getPrioritizedItems() {
+        return List.copyOf(rightItems);
+    }
+
     /** Pre-fill an item's dropdowns from the score stored for its id, if any. */
     private void applyStoredScore(ScoredItem si) {
         ItemScore stored = document.getItemScore(si.item().id());
