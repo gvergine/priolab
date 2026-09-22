@@ -286,8 +286,14 @@ scoring state). Each row's `id` is a `Hyperlink` that opens the item's `url` via
   emitted the item — stored on `ScoredItem`), **ID**, **Description**, the four
   WSJF inputs — **UBV**, **TC**, **RR/RO**, **Size** — each an in-cell `ComboBox`
   of *blank* (default, = `null`) or a modified-Fibonacci number
-  (`1, 2, 3, 5, 8, 13, 20, 40, 100`), and a computed **WSJF** column. Only
-  **Order** and **ID** (the "key") are sortable; the other columns are fixed.
+  (`1, 2, 3, 5, 8, 13, 20, 40, 100`), and a computed **WSJF** column. **Every
+  column sorts**, ascending and descending, by clicking its header — including
+  each WSJF input and the WSJF result. For the nullable columns a blank counts
+  as the *lowest* value (`blankLowest()`), so descending — the interesting
+  direction — leaves the unscored items last, like the result table; **Order**
+  always takes you back to the connector's own sequence. Editing a score does
+  **not** re-run the sort (rows would jump under the cursor mid-edit), but a new
+  import does, so the rows never contradict the header's sort arrow.
   Rows that are not fully scored (WSJF still blank) are highlighted **light
   yellow** via the `:incomplete` pseudo-class (see `app.css`).
 - **WSJF** = `(BusinessValue + TimeCriticality + RiskReduction) / JobSize`,

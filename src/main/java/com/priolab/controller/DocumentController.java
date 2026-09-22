@@ -98,6 +98,9 @@ public class DocumentController {
             scored.add(si);
         }
         leftTable.getItems().setAll(scored);
+        // Replacing the items does not re-run an active sort, which would leave
+        // the header claiming an order the rows do not have.
+        leftTable.sort();
         rightItems.setAll(scored);
         resortRight();
     }
@@ -138,19 +141,17 @@ public class DocumentController {
         // Light-yellow highlight for any row that is not fully scored yet.
         leftTable.setRowFactory(tv -> new ScoredRow());
 
-        // Only Order and the id (the "key") are sortable; the rest are fixed.
-        TableColumn<ScoredItem, String> description = descriptionColumn();
-        description.setSortable(false);
-
+        // Every column sorts, ascending and descending: the connector's own
+        // order, the key, the description, each WSJF input and the result.
         leftTable.getColumns().setAll(List.of(
                 orderColumn(),
                 idColumn(),
-                description,
+                descriptionColumn(),
                 scoreColumn("UBV", ScoredItem::businessValueProperty),
                 scoreColumn("TC", ScoredItem::timeCriticalityProperty),
                 scoreColumn("RR/RO", ScoredItem::riskReductionProperty),
                 scoreColumn("Size", ScoredItem::jobSizeProperty),
-                leftWsjfColumn()));
+                wsjfColumn()));
     }
 
     private TableColumn<ScoredItem, Integer> orderColumn() {
@@ -158,12 +159,6 @@ public class DocumentController {
         col.setPrefWidth(52);
         col.setMinWidth(44);
         col.setCellValueFactory(cd -> new ReadOnlyObjectWrapper<>(cd.getValue().order()));
-        return col;
-    }
-
-    private TableColumn<ScoredItem, Double> leftWsjfColumn() {
-        TableColumn<ScoredItem, Double> col = wsjfColumn();
-        col.setSortable(false);
         return col;
     }
 
@@ -202,6 +197,16 @@ public class DocumentController {
 
     // --- Column factories ----------------------------------------------------
 
+    /**
+     * Comparator for the nullable score / WSJF columns. A blank counts as the
+     * lowest value, so ascending lists the unscored items first and descending
+     * — the interesting direction — puts them last, behind everything scored,
+     * the same way the result table ranks them.
+     */
+    private static <T extends Comparable<T>> Comparator<T> blankLowest() {
+        return Comparator.nullsFirst(Comparator.naturalOrder());
+    }
+
     private TableColumn<ScoredItem, ScoredItem> idColumn() {
         TableColumn<ScoredItem, ScoredItem> col = new TableColumn<>("ID");
         col.setPrefWidth(86);
@@ -219,6 +224,7 @@ public class DocumentController {
         col.setMinWidth(70);
         col.setCellValueFactory(cd ->
                 new ReadOnlyStringWrapper(cd.getValue().item().description()));
+        col.setComparator(Comparator.nullsFirst(String.CASE_INSENSITIVE_ORDER));
         return col;
     }
 
@@ -227,6 +233,7 @@ public class DocumentController {
         col.setPrefWidth(62);
         col.setMinWidth(50);
         col.setCellValueFactory(cd -> cd.getValue().wsjfProperty());
+        col.setComparator(blankLowest());
         col.setCellFactory(c -> new TableCell<>() {
             @Override
             protected void updateItem(Double value, boolean empty) {
@@ -244,7 +251,7 @@ public class DocumentController {
         // Floor the width: below this the ComboBox has no room to draw the
         // selected number and renders blank, which looks like a lost selection.
         col.setMinWidth(56);
-        col.setSortable(false);
+        col.setComparator(blankLowest());
         col.setCellValueFactory(cd -> extractor.apply(cd.getValue()));
         col.setCellFactory(c -> new ScoreCell(extractor));
         return col;
