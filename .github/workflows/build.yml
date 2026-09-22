@@ -1,0 +1,130 @@
+# Builds the two things a user can just download and run:
+#
+#   Linux    PrioLab-<version>-x86_64.AppImage   (chmod +x, double-click)
+#            PrioLab-<version>-linux-x86_64.zip  (unzip, run bin/priolab)
+#   Windows  PrioLab-<version>-windows-x64.zip   (unzip, run priolab.exe)
+#
+# Both zips are the jpackage *app image*: the app plus its own JRE, with the
+# native launcher jpackage builds. No installers, nothing to install.
+name: build
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch makes the running build pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    # Deliberately not ubuntu-latest: binaries built against a newer glibc will
+    # not start on older distributions, so build on the oldest runner we
+    # support and the result runs on newer ones too.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'          # matches the Gradle toolchain
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # appimagetool shells out to mksquashfs.
+      - name: Install squashfs-tools
+        run: sudo apt-get update && sudo apt-get install -y squashfs-tools
+
+      - name: Read the project version
+        id: project
+        run: echo "version=$(./gradlew -q properties | awk '/^version:/ {print $2}')" >> "$GITHUB_OUTPUT"
+
+      # 'appimage' depends on 'jpackageImage', so this one command produces the
+      # AppImage *and* the app image the portable zip is made of.
+      - name: Build
+        run: ./gradlew --no-daemon appimage
+
+      - name: Pack the portable app image
+        run: |
+          mkdir -p build/distributions
+          cd build/jpackage
+          zip -qry "../distributions/PrioLab-${{ steps.project.outputs.version }}-linux-x86_64.zip" priolab
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: priolab-linux-appimage
+          path: build/distributions/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: priolab-linux-portable
+          path: build/distributions/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Read the project version
+        id: project
+        shell: bash
+        run: echo "version=$(./gradlew -q properties | awk '/^version:/ {print $2}')" >> "$GITHUB_OUTPUT"
+
+      # jpackage only needs WiX for installers; an app image needs nothing extra.
+      - name: Build the app image
+        shell: bash
+        run: ./gradlew --no-daemon jpackageImage
+
+      - name: Pack the portable app image
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build/distributions | Out-Null
+          Compress-Archive -Path build/jpackage/priolab `
+            -DestinationPath "build/distributions/PrioLab-${{ steps.project.outputs.version }}-windows-x64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: priolab-windows-portable
+          path: build/distributions/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  # Tag a commit 'v1.0.0' and the same files show up as a GitHub Release.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${{ github.ref_name }}" dist/* --title "${{ github.ref_name }}" --generate-notes --repo "${{ github.repository }}"

@@ -70,6 +70,33 @@ Three tasks make it up:
 `appimage` is deliberately not wired into `build`/`assemble` — it needs network
 access on the first run.
 
+### CI (`.github/workflows/build.yml`)
+
+Pushes, PRs and `v*` tags build the two things a user can download and run, and
+nothing else — **no installers**:
+
+| Job | Runner | Artifacts |
+|---|---|---|
+| `linux` | `ubuntu-22.04` | `PrioLab-<version>-x86_64.AppImage`, `PrioLab-<version>-linux-x86_64.zip` |
+| `windows` | `windows-latest` | `PrioLab-<version>-windows-x64.zip` |
+| `release` | on `v*` tags | the above + `SHA256SUMS`, attached to a GitHub Release via `gh` |
+
+Both zips are the **jpackage app image** (app + bundled JRE + the native
+launcher), so they need no Java and no install: unzip and run `bin/priolab` /
+`priolab.exe`. The Linux job runs `./gradlew appimage`, which already depends on
+`jpackageImage`, so one build yields both artifacts.
+
+Two runner choices worth keeping:
+- **`ubuntu-22.04`, not `ubuntu-latest`**: binaries linked against a newer glibc
+  refuse to start on older distributions, so build on the oldest supported
+  runner.
+- **No WiX on Windows**: `jpackage` needs it for `.msi`/`.exe` *installers*, not
+  for an app image, so the Windows job needs no extra tooling.
+
+The AppImage step needs `squashfs-tools` (appimagetool shells out to
+`mksquashfs`) but no FUSE, since the build passes
+`--appimage-extract-and-run`.
+
 ## Runtime behavior
 
 ### First run / configuration
