@@ -1,3 +1,7 @@
+/* Ctrl+scroll zoom works by setting -fx-font-size on the main window's root
+   (see MainController#installZoom), so sizes below are in em — relative to the
+   inherited font size — and scale with it instead of staying put. 13px is the
+   100% baseline (MainController.BASE_FONT_SIZE). */
 .root {
     -fx-font-family: "Sans Serif";
     -fx-font-size: 13px;
@@ -5,7 +9,7 @@
 
 /* Wizard */
 .wizard .title {
-    -fx-font-size: 22px;
+    -fx-font-size: 1.7em;
     -fx-font-weight: bold;
 }
 
@@ -25,7 +29,7 @@
 
 .placeholder {
     -fx-text-fill: #888888;
-    -fx-font-size: 15px;
+    -fx-font-size: 1.15em;
 }
 
 .status {
@@ -45,7 +49,7 @@
 }
 
 .pane-title {
-    -fx-font-size: 14px;
+    -fx-font-size: 1.08em;
     -fx-font-weight: bold;
     -fx-text-fill: #444444;
 }
@@ -62,6 +66,12 @@
 
 .score-combo > .arrow-button {
     -fx-padding: 2 4 2 2;
+}
+
+/* Table rows are 24px tall by default, which would clip the text as soon as the
+   font grows: tie the row height to the font size too. */
+.table-row-cell {
+    -fx-cell-size: 1.9em;
 }
 
 /* Rows in the left table that are not fully scored yet. */
@@ -81,13 +91,13 @@
 }
 
 .icon-button {
-    -fx-font-size: 14px;
+    -fx-font-size: 1.08em;
     -fx-padding: 2 8 2 8;
 }
 
 /* Connector settings dialog */
 .dialog .section-title {
-    -fx-font-size: 16px;
+    -fx-font-size: 1.23em;
     -fx-font-weight: bold;
 }
 
@@ -113,5 +123,5 @@
 
 .log {
     -fx-font-family: "monospace";
-    -fx-font-size: 12px;
+    -fx-font-size: 0.92em;
 }

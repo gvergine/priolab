@@ -17,13 +17,13 @@
 <?import javafx.scene.layout.Region?>
 <?import javafx.scene.layout.StackPane?>
 
-<BorderPane xmlns="http://javafx.com/javafx"
+<BorderPane fx:id="rootPane" xmlns="http://javafx.com/javafx"
             xmlns:fx="http://javafx.com/fxml"
             fx:controller="com.priolab.controller.MainController"
             styleClass="main">
     <top>
         <HBox alignment="CENTER_LEFT" styleClass="topbar">
-            <MenuBar>
+            <MenuBar minWidth="-Infinity">
                 <menus>
                     <Menu text="File">
                         <items>
@@ -51,10 +51,10 @@
                     <Insets top="0" right="10" bottom="0" left="10"/>
                 </padding>
                 <Label text="Connector:"/>
-                <ComboBox fx:id="connectorCombo" prefWidth="200"/>
-                <Button fx:id="connectorSettingsButton" text="⚙"
+                <ComboBox fx:id="connectorCombo" prefWidth="200" minWidth="60"/>
+                <Button fx:id="connectorSettingsButton" text="⚙" minWidth="-Infinity"
                         onAction="#onConnectorSettings" styleClass="icon-button"/>
-                <Button fx:id="importButton" text="Import" onAction="#onImport"/>
+                <Button fx:id="importButton" text="Import" minWidth="-Infinity" onAction="#onImport"/>
                 <ProgressIndicator fx:id="importProgress" prefWidth="20" prefHeight="20"
                                    visible="false" managed="false"/>
             </HBox>
@@ -67,10 +67,10 @@
                     <Insets top="0" right="10" bottom="0" left="10"/>
                 </padding>
                 <Label text="Exporter:"/>
-                <ComboBox fx:id="exporterCombo" prefWidth="200"/>
-                <Button fx:id="exporterSettingsButton" text="⚙"
+                <ComboBox fx:id="exporterCombo" prefWidth="200" minWidth="60"/>
+                <Button fx:id="exporterSettingsButton" text="⚙" minWidth="-Infinity"
                         onAction="#onExporterSettings" styleClass="icon-button"/>
-                <Button fx:id="exportButton" text="Export" onAction="#onExport"/>
+                <Button fx:id="exportButton" text="Export" minWidth="-Infinity" onAction="#onExport"/>
                 <ProgressIndicator fx:id="exportProgress" prefWidth="20" prefHeight="20"
                                    visible="false" managed="false"/>
             </HBox>

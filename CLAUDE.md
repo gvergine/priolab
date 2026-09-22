@@ -248,6 +248,18 @@ holds **two identical groups**, connector first, exporter after a separator:
 
 Both bars are disabled until a project is open.
 
+**Zoom.** The main window scales with **Ctrl+scroll** anywhere in it (also
+Ctrl+plus / Ctrl+minus, and Ctrl+0 back to 100%), clamped to 60%–250% in 10%
+steps, with the level echoed in the status bar. `MainController.installZoom()`
+implements it by setting `-fx-font-size` on the window's root
+(`BASE_FONT_SIZE = 13px` = 100%, matching `.root` in app.css): JavaFX's control
+styling is font-relative, so text, paddings and table rows all grow and the
+layout **reflows**. `Node.setScaleX/Y` would instead magnify a fixed layout and
+push half the window out of view, which is why it is not used. The handlers are
+event *filters* on the root, so Ctrl+scroll over a table or the console zooms
+instead of scrolling it. The zoom is per-session — it is not persisted — and
+only applies to the main window, not the modal dialogs.
+
 **Center view** (`DocumentController`) is a **horizontal `SplitPane`** of two
 `TableView`s over `model/ScoredItem.java` (a `PrioItem` plus editable WSJF
 scoring state). Each row's `id` is a `Hyperlink` that opens the item's `url` via
@@ -365,4 +377,8 @@ src/main/resources/com/priolab/
 - Connectors and exporters stay interchangeable in everything but direction —
   same manifest, same discovery, same settings dialog. Anything new that applies
   to one should be expressed per `PluginKind` rather than duplicated.
+- Sizes in `app.css` are **em**, not px, so Ctrl+scroll zoom scales them; only
+  `.root`'s own 13px baseline and a few hairline paddings stay absolute. A new
+  `-fx-font-size` in px would simply ignore the zoom. Table rows need
+  `-fx-cell-size` in em for the same reason.
 - Pin dependency versions in the `ext { }` block in `build.gradle`.

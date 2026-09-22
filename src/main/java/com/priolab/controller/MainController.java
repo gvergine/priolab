@@ -23,6 +23,9 @@ import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.TextArea;
+import javafx.scene.input.KeyEvent;
+import javafx.scene.input.ScrollEvent;
+import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.StackPane;
 import javafx.stage.FileChooser;
@@ -37,6 +40,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.Locale;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -56,6 +60,15 @@ import java.util.Optional;
  */
 public class MainController {
 
+    /** Root font size at 100% zoom; matches {@code .root} in app.css. */
+    private static final double BASE_FONT_SIZE = 13;
+
+    private static final double MIN_ZOOM = 0.6;
+    private static final double MAX_ZOOM = 2.5;
+    private static final double ZOOM_STEP = 1.1;
+
+    @FXML
+    private BorderPane rootPane;
     @FXML
     private Label statusLabel;
     @FXML
@@ -95,6 +108,9 @@ public class MainController {
     private Document document;
     private DocumentController documentController;
 
+    /** Current UI scale, 1.0 = 100% (see {@link #installZoom()}). */
+    private double zoom = 1.0;
+
     private final ObjectMapper jsonMapper = new ObjectMapper();
 
     /** Phases of the connector's stdout as a run is read. */
@@ -113,7 +129,59 @@ public class MainController {
                 connectorsDir == null ? null : Paths.get(connectorsDir)));
         managers.put(PluginKind.EXPORTER, new ConnectorManager(
                 exportersDir == null ? null : Paths.get(exportersDir)));
+        installZoom();
         setStatus("Ready — connectors: " + connectorsDir + " · exporters: " + exportersDir);
+    }
+
+    /**
+     * Zoom the whole window with <b>Ctrl+scroll</b> (and Ctrl+plus / Ctrl+minus
+     * / Ctrl+0 to reset).
+     *
+     * <p>It works by setting {@code -fx-font-size} on the window's root: every
+     * size in app.css is expressed in {@code em} and JavaFX's own control
+     * styling is font-relative, so the whole UI — text, paddings, table rows —
+     * grows and <em>relayouts</em> with it. That is why this is preferred over
+     * {@code Node.scaleX/scaleY}, which would merely magnify a fixed layout and
+     * push the rest of the window out of view.
+     *
+     * <p>The handlers are event <em>filters</em> on the root, so a Ctrl+scroll
+     * over the tables or the console zooms instead of scrolling them.
+     */
+    private void installZoom() {
+        rootPane.addEventFilter(ScrollEvent.SCROLL, event -> {
+            if (!event.isShortcutDown() || event.getDeltaY() == 0) {
+                return;
+            }
+            applyZoom(event.getDeltaY() > 0 ? zoom * ZOOM_STEP : zoom / ZOOM_STEP);
+            event.consume();
+        });
+        rootPane.addEventFilter(KeyEvent.KEY_PRESSED, event -> {
+            if (!event.isShortcutDown()) {
+                return;
+            }
+            switch (event.getCode()) {
+                case PLUS, ADD, EQUALS -> applyZoom(zoom * ZOOM_STEP);
+                case MINUS, SUBTRACT -> applyZoom(zoom / ZOOM_STEP);
+                case DIGIT0, NUMPAD0 -> applyZoom(1.0);
+                default -> {
+                    return;
+                }
+            }
+            event.consume();
+        });
+    }
+
+    /** Clamp, remember and apply a new zoom level. */
+    private void applyZoom(double factor) {
+        double next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, factor));
+        if (Math.abs(next - zoom) < 0.001) {
+            return;
+        }
+        zoom = next;
+        // Locale.ROOT: a comma decimal separator would not parse as CSS.
+        rootPane.setStyle(String.format(
+                Locale.ROOT, "-fx-font-size: %.2fpx;", BASE_FONT_SIZE * zoom));
+        setStatus("Zoom: " + Math.round(zoom * 100) + "%");
     }
 
     @FXML
