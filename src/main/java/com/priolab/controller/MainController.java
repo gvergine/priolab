@@ -13,6 +13,7 @@ import com.priolab.model.PrioItem;
 import com.priolab.model.ScoredItem;
 import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
+import javafx.beans.value.ChangeListener;
 import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
@@ -48,6 +49,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * Main window controller. Owns the currently open {@link Document}, drives the
@@ -261,9 +263,7 @@ public class MainController {
         chooser.setTitle("Open Project");
         chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(
                 "SQLite Database", "*.sqlite3", "*.sqlite", "*.db"));
-        boolean maximized = app.getStage().isMaximized();
-        File file = chooser.showOpenDialog(app.getStage());
-        restoreMaximized(maximized);
+        File file = runModal(() -> chooser.showOpenDialog(app.getStage()));
         if (file == null) {
             return;
         }
@@ -624,39 +624,65 @@ public class MainController {
     }
 
     /**
-     * Show a modal dialog owned by the main window, keeping that window
-     * maximized across it.
+     * Run a modal dialog while <b>holding the main window in its maximized
+     * state</b>.
      *
-     * <p>When a modal child disables its owner, JavaFX can drop a maximized
-     * window back to its restored size — the window visibly un-maximizes as the
-     * popup opens (seen on Windows). Re-applying the flag once the dialog is up
-     * and again when it closes papers over that; where the bug does not occur
-     * both checks are no-ops, because the flag is already what we want.
+     * <p>Opening any dialog snaps a maximized stage back to its restored size on
+     * Linux — <a href="https://bugs.openjdk.org/browse/JDK-8319089">JDK-8319089</a>,
+     * open since JavaFX 8 with no fix version, and per
+     * <a href="https://bugs.openjdk.org/browse/JDK-8332352">JDK-8332352</a> it
+     * depends on the window manager (KWin yes, GNOME Shell no). Since the
+     * moment the window manager strikes is not ours to predict, we do not try
+     * to catch it at one point in time: for as long as the dialog is up we
+     * watch {@code maximizedProperty} and put the window straight back, and
+     * once it closes we check again — including the case where the flag still
+     * claims "maximized" while the window has actually been resized, which is
+     * then forced by toggling the state.
+     *
+     * <p>On a platform that behaves, nothing ever fires and the window is left
+     * untouched.
      */
+    private <T> T runModal(Supplier<T> show) {
+        Stage owner = app.getStage();
+        if (!owner.isMaximized()) {
+            return show.get();
+        }
+        double width = owner.getWidth();
+        double height = owner.getHeight();
+        ChangeListener<Boolean> keeper = (obs, was, is) -> {
+            if (!is) {
+                Platform.runLater(() -> owner.setMaximized(true));
+            }
+        };
+        owner.maximizedProperty().addListener(keeper);
+        try {
+            return show.get();
+        } finally {
+            owner.maximizedProperty().removeListener(keeper);
+            if (!owner.isMaximized()) {
+                owner.setMaximized(true);
+            } else if (owner.getWidth() != width || owner.getHeight() != height) {
+                // Still flagged maximized, yet the window did shrink: make
+                // JavaFX re-apply the state instead of believing the flag.
+                owner.setMaximized(false);
+                owner.setMaximized(true);
+            }
+        }
+    }
+
+    /** Show a modal dialog owned by the main window (see {@link #runModal}). */
     private void showModal(Stage dialog) {
-        boolean maximized = app.getStage().isMaximized();
-        dialog.setOnShown(event -> Platform.runLater(() -> restoreMaximized(maximized)));
-        dialog.showAndWait();
-        restoreMaximized(maximized);
+        runModal(() -> {
+            dialog.showAndWait();
+            return null;
+        });
     }
 
     /** As {@link #showModal(Stage)}, for the alerts (which own no stage of ours). */
     private Optional<ButtonType> showModal(Alert alert) {
-        Stage owner = app.getStage();
-        alert.initOwner(owner);   // also centers the alert on the window
+        alert.initOwner(app.getStage());   // also centers the alert on the window
         App.applyIcon(alert);
-        boolean maximized = owner.isMaximized();
-        alert.setOnShown(event -> Platform.runLater(() -> restoreMaximized(maximized)));
-        Optional<ButtonType> choice = alert.showAndWait();
-        restoreMaximized(maximized);
-        return choice;
-    }
-
-    /** Re-maximize the main window if a modal dialog knocked it out of it. */
-    private void restoreMaximized(boolean wasMaximized) {
-        if (wasMaximized && !app.getStage().isMaximized()) {
-            app.getStage().setMaximized(true);
-        }
+        return runModal(alert::showAndWait);
     }
 
     /** Look up one connector / exporter by name in its own directory. */
