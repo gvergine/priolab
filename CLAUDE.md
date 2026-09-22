@@ -35,6 +35,15 @@ Installer output:
 
 The installer bundles its own JRE, so end users don't need Java installed.
 
+**Icons are per-OS**: `jpackage` only accepts the host's format, so the build
+picks `packaging/windows/priolab.ico` on Windows and
+`src/main/resources/com/priolab/img/priolab.png` elsewhere. Handing it the wrong
+one is only a *warning* — and the bundle then silently ships the default Java
+icon, which is what the Windows build did before the `.ico` existed. The `.ico`
+is generated from the PNG (Pillow, BMP-encoded entries at 16/24/32/48/64/128/256
+for maximum compatibility with the icon resource jpackage writes into the
+launcher `.exe`); regenerate it if the app icon changes.
+
 ### AppImage (no installation)
 
 `./gradlew appimage` wraps the very same jpackage **app image** (app + bundled
@@ -139,9 +148,8 @@ selected connector:
 The parse is a small state machine in `MainController` (`RunPhase`:
 `AWAIT_COUNT → READ_ITEMS → DONE`), fed by `handleConnectorLine`. The resulting
 items are handed to `DocumentController.setItems(...)`. While a connector runs,
-`setRunning(true)` disables the connector inputs (combo, ⚙ settings, Run) and
-shows an indeterminate `ProgressIndicator`; the exit callback re-enables them.
-`shutdown()` kills the process on exit/close.
+`setRunning(...)` locks the window down (see *Documents & editing*); the exit
+callback releases it. `shutdown()` kills the process on exit/close.
 
 The main window's **Console pane** (bottom of a vertical `SplitPane`, with a
 **Clear** button) shows the run: the command line, the environment PrioLab
@@ -236,17 +244,26 @@ holds **two identical groups**, connector first, exporter after a separator:
 - a `ComboBox` of that kind's discovered names, two-way bound to
   `Document.selectedProperty(kind)` and persisted to `meta["connector"]` /
   `meta["exporter"]`;
-- a **⚙ settings button** that opens a modal dialog (`pluginsettings.fxml` /
+- a **gear settings button** (`img/gear.png` as the button's `graphic` — a glyph
+  like `⚙` was invisible on Linux and tiny on Windows; its `ImageView` is sized
+  from the button's font, so it follows the zoom) that opens a modal dialog
+  (`pluginsettings.fxml` /
   `PluginSettingsController`, shared by both kinds) with one text field per
   manifest **key**, seeded from and (on OK) written back into the document.
   These key values are persisted per kind (see *SQLite*) and tracked by
   `Document` (`getSetting` / `setSetting`, folded into the `dirty` flag). They
   are the **environment variables** the command is launched with;
 - the action button — **Import** for the connector, **Export** for the exporter
-  — and its own progress spinner. While one runs, only that group's inputs are
-  disabled; the other kind refuses to start with a status message.
+  — and its own progress spinner.
 
 Both bars are disabled until a project is open.
+
+**A run owns the window.** `setRunning(kind, busy)` disables the **menu bar,
+both program groups and the item tables** until the process exits — nothing can
+be re-run, re-selected, reconfigured or edited underneath a running connector or
+exporter — and shows only that kind's spinner. The console pane stays live
+(including **Clear**) so the output can be watched, and the window's close
+button still works: `shutdown()` kills the child process.
 
 **Zoom.** The main window scales with **Ctrl+scroll** anywhere in it (also
 Ctrl+plus / Ctrl+minus, and Ctrl+0 back to 100%), clamped to 60%–250% in 10%
@@ -319,6 +336,7 @@ settings.gradle
 packaging/appimage/                AppImage assets
   AppRun                           entry point -> usr/bin/priolab
   priolab.desktop                  desktop entry (also used for the menu entry)
+packaging/windows/priolab.ico      app icon in Windows' own format (jpackage)
 src/main/java/module-info.java     module com.priolab
 src/main/java/com/priolab/
   App.java                         Application entry; chooses wizard vs main
@@ -340,6 +358,7 @@ src/main/java/com/priolab/
   model/PluginKind.java            CONNECTOR (importer) vs EXPORTER
 src/main/resources/com/priolab/
   img/priolab.png                  256x256 app icon (stage, jpackage, AppImage)
+  img/gear.png                     settings-button icon
   fxml/wizard.fxml
   fxml/newproject.fxml
   fxml/pluginsettings.fxml

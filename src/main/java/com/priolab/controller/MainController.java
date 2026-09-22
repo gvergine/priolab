@@ -12,6 +12,7 @@ import com.priolab.model.PluginKind;
 import com.priolab.model.PrioItem;
 import com.priolab.model.ScoredItem;
 import javafx.application.Platform;
+import javafx.beans.binding.Bindings;
 import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
@@ -20,9 +21,11 @@ import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.MenuBar;
 import javafx.scene.control.Label;
 import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.TextArea;
+import javafx.scene.image.ImageView;
 import javafx.scene.input.KeyEvent;
 import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.BorderPane;
@@ -70,6 +73,8 @@ public class MainController {
     @FXML
     private BorderPane rootPane;
     @FXML
+    private MenuBar menuBar;
+    @FXML
     private Label statusLabel;
     @FXML
     private StackPane contentPane;
@@ -80,6 +85,8 @@ public class MainController {
     @FXML
     private Button connectorSettingsButton;
     @FXML
+    private ImageView connectorSettingsIcon;
+    @FXML
     private ProgressIndicator importProgress;
     @FXML
     private HBox connectorBar;
@@ -89,6 +96,8 @@ public class MainController {
     private Button exportButton;
     @FXML
     private Button exporterSettingsButton;
+    @FXML
+    private ImageView exporterSettingsIcon;
     @FXML
     private ProgressIndicator exportProgress;
     @FXML
@@ -130,6 +139,8 @@ public class MainController {
         managers.put(PluginKind.EXPORTER, new ConnectorManager(
                 exportersDir == null ? null : Paths.get(exportersDir)));
         installZoom();
+        sizeWithFont(connectorSettingsIcon, connectorSettingsButton);
+        sizeWithFont(exporterSettingsIcon, exporterSettingsButton);
         setStatus("Ready — connectors: " + connectorsDir + " · exporters: " + exportersDir);
     }
 
@@ -169,6 +180,17 @@ public class MainController {
             }
             event.consume();
         });
+    }
+
+    /**
+     * Tie a button's image to its font size, so the gear grows and shrinks with
+     * the zoom exactly like a text label would.
+     */
+    private static void sizeWithFont(ImageView icon, Button button) {
+        var size = Bindings.createDoubleBinding(
+                () -> Math.rint(button.getFont().getSize() * 1.15), button.fontProperty());
+        icon.fitWidthProperty().bind(size);
+        icon.fitHeightProperty().bind(size);
     }
 
     /** Clamp, remember and apply a new zoom level. */
@@ -292,9 +314,11 @@ public class MainController {
     @FXML
     private void onAbout() {
         Alert alert = new Alert(Alert.AlertType.INFORMATION,
-                "PrioLab\n\nA tool to help you prioritize anything, "
-                        + "powered by pluggable connectors.");
-        alert.setHeaderText("About PrioLab");
+                "A tool to help you prioritize anything, powered by pluggable "
+                        + "connectors and exporters.\n\n"
+                        + "Giovanni Vergine\n"
+                        + "verginegiovanni@gmail.com");
+        alert.setHeaderText("PrioLab");
         alert.setTitle("About");
         App.applyIcon(alert);
         alert.showAndWait();
@@ -523,23 +547,22 @@ public class MainController {
     }
 
     /**
-     * Reflect a run in the UI: while the program runs, disable that group's
-     * inputs and show its spinning indeterminate progress indicator.
+     * Reflect a run in the UI. A run owns the window: the menu, <em>both</em>
+     * program groups and the item tables are disabled until the process exits,
+     * so nothing can be re-run, re-selected, reconfigured or edited underneath
+     * it. Only the running kind's indeterminate spinner is shown; the console
+     * stays live so the output can be watched (and cleared).
      */
     private void setRunning(PluginKind kind, boolean busy) {
-        if (kind == PluginKind.CONNECTOR) {
-            importButton.setDisable(busy);
-            connectorCombo.setDisable(busy);
-            connectorSettingsButton.setDisable(busy);
-            importProgress.setVisible(busy);
-            importProgress.setManaged(busy);
-        } else {
-            exportButton.setDisable(busy);
-            exporterCombo.setDisable(busy);
-            exporterSettingsButton.setDisable(busy);
-            exportProgress.setVisible(busy);
-            exportProgress.setManaged(busy);
-        }
+        menuBar.setDisable(busy);
+        connectorBar.setDisable(busy || document == null);
+        exporterBar.setDisable(busy || document == null);
+        contentPane.setDisable(busy);
+
+        ProgressIndicator spinner =
+                kind == PluginKind.CONNECTOR ? importProgress : exportProgress;
+        spinner.setVisible(busy);
+        spinner.setManaged(busy);
     }
 
     @FXML

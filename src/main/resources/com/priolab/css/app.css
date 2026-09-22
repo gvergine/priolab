@@ -90,8 +90,9 @@
     -fx-text-fill: #444444;
 }
 
+/* Buttons whose label is an image (the settings gear); the ImageView is sized
+   from the button's font size in MainController, so it follows the zoom. */
 .icon-button {
-    -fx-font-size: 1.08em;
     -fx-padding: 2 8 2 8;
 }
 

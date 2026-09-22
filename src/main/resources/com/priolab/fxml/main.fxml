@@ -11,6 +11,8 @@
 <?import javafx.scene.control.Separator?>
 <?import javafx.scene.control.SeparatorMenuItem?>
 <?import javafx.scene.control.SplitPane?>
+<?import javafx.scene.image.Image?>
+<?import javafx.scene.image.ImageView?>
 <?import javafx.scene.control.TextArea?>
 <?import javafx.scene.layout.BorderPane?>
 <?import javafx.scene.layout.HBox?>
@@ -23,7 +25,7 @@
             styleClass="main">
     <top>
         <HBox alignment="CENTER_LEFT" styleClass="topbar">
-            <MenuBar minWidth="-Infinity">
+            <MenuBar fx:id="menuBar" minWidth="-Infinity">
                 <menus>
                     <Menu text="File">
                         <items>
@@ -52,8 +54,16 @@
                 </padding>
                 <Label text="Connector:"/>
                 <ComboBox fx:id="connectorCombo" prefWidth="200" minWidth="60"/>
-                <Button fx:id="connectorSettingsButton" text="⚙" minWidth="-Infinity"
-                        onAction="#onConnectorSettings" styleClass="icon-button"/>
+                <Button fx:id="connectorSettingsButton" minWidth="-Infinity"
+                        onAction="#onConnectorSettings" styleClass="icon-button">
+                    <graphic>
+                        <ImageView fx:id="connectorSettingsIcon" preserveRatio="true">
+                            <image>
+                                <Image url="@../img/gear.png"/>
+                            </image>
+                        </ImageView>
+                    </graphic>
+                </Button>
                 <Button fx:id="importButton" text="Import" minWidth="-Infinity" onAction="#onImport"/>
                 <ProgressIndicator fx:id="importProgress" prefWidth="20" prefHeight="20"
                                    visible="false" managed="false"/>
@@ -68,8 +78,16 @@
                 </padding>
                 <Label text="Exporter:"/>
                 <ComboBox fx:id="exporterCombo" prefWidth="200" minWidth="60"/>
-                <Button fx:id="exporterSettingsButton" text="⚙" minWidth="-Infinity"
-                        onAction="#onExporterSettings" styleClass="icon-button"/>
+                <Button fx:id="exporterSettingsButton" minWidth="-Infinity"
+                        onAction="#onExporterSettings" styleClass="icon-button">
+                    <graphic>
+                        <ImageView fx:id="exporterSettingsIcon" preserveRatio="true">
+                            <image>
+                                <Image url="@../img/gear.png"/>
+                            </image>
+                        </ImageView>
+                    </graphic>
+                </Button>
                 <Button fx:id="exportButton" text="Export" minWidth="-Infinity" onAction="#onExport"/>
                 <ProgressIndicator fx:id="exportProgress" prefWidth="20" prefHeight="20"
                                    visible="false" managed="false"/>

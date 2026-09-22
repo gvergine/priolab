@@ -64,8 +64,13 @@ jlink {
 
     jpackage {
         imageName = 'priolab'
-        icon = 'src/main/resources/com/priolab/img/priolab.png'
         def currentOs = org.gradle.internal.os.OperatingSystem.current()
+        // jpackage only accepts the host's icon format -- .ico on Windows,
+        // .png on Linux. Handing it the wrong one is just a warning, and the
+        // bundle then silently keeps the default Java icon.
+        icon = currentOs.windows
+                ? 'packaging/windows/priolab.ico'
+                : 'src/main/resources/com/priolab/img/priolab.png'
         if (currentOs.windows) {
             installerType = 'msi'
             installerOptions = ['--win-dir-chooser', '--win-menu', '--win-shortcut', '--win-per-user-install']
