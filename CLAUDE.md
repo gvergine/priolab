@@ -35,6 +35,15 @@ Installer output:
 
 The installer bundles its own JRE, so end users don't need Java installed.
 
+**The version lives in exactly one place**: the `version` property in
+`build.gradle`. `compileJava` records it in the module descriptor
+(`options.javaModuleVersion`), jlink and jpackage carry that into the runtime
+image, and `App.version()` reads it back — `App.class.getModule()
+.getDescriptor().rawVersion()`, falling back to `"dev"` outside a versioned
+module — for the **About** dialog. The same property names the AppImage, the
+portable zips and the CI artifacts, so bumping it there is the whole release
+edit.
+
 **Icons are per-OS**: `jpackage` only accepts the host's format, so the build
 picks `packaging/windows/priolab.ico` on Windows and
 `src/main/resources/com/priolab/img/priolab.png` elsewhere. Handing it the wrong
@@ -96,6 +105,10 @@ Two runner choices worth keeping:
 The AppImage step needs `squashfs-tools` (appimagetool shells out to
 `mksquashfs`) but no FUSE, since the build passes
 `--appimage-extract-and-run`.
+
+Artifact names come from the Gradle `version`, while the release is named after
+the **tag** — tagging `v1.1.0` without bumping `version` in `build.gradle` would
+publish a `v1.1.0` release full of `1.0.0` files. Bump first, then tag.
 
 ## Runtime behavior
 

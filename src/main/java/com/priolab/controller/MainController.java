@@ -314,7 +314,8 @@ public class MainController {
     @FXML
     private void onAbout() {
         Alert alert = new Alert(Alert.AlertType.INFORMATION,
-                "A tool to help you prioritize anything, powered by pluggable "
+                "Version " + App.version() + "\n\n"
+                        + "A tool to help you prioritize anything, powered by pluggable "
                         + "connectors and exporters.\n\n"
                         + "Giovanni Vergine\n"
                         + "verginegiovanni@gmail.com");

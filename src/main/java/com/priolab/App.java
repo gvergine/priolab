@@ -32,6 +32,17 @@ public class App extends Application {
     private final ConfigManager configManager = new ConfigManager();
 
     /**
+     * The application version, as recorded in the module descriptor at build
+     * time from the Gradle {@code version} property (see build.gradle). Falls
+     * back to {@code "dev"} when the app runs outside a versioned module, e.g.
+     * straight off a classpath in an IDE.
+     */
+    public static String version() {
+        var descriptor = App.class.getModule().getDescriptor();
+        return descriptor == null ? "dev" : descriptor.rawVersion().orElse("dev");
+    }
+
+    /**
      * Give {@code stage} the PrioLab icon. Used for the main window and for the
      * modal dialogs, which get their own entry in the task bar.
      */

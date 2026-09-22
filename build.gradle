@@ -38,6 +38,13 @@ application {
     mainClass = 'com.priolab.App'
 }
 
+// Record the project version in module-info, which jlink and jpackage carry
+// into the runtime image; App.version() reads it back for the About dialog, so
+// the version lives in exactly one place: the 'version' property above.
+tasks.named('compileJava') {
+    options.javaModuleVersion = provider { project.version.toString() }
+}
+
 // ---------------------------------------------------------------------------
 // jlink / jpackage: produces a self-contained runtime image and native
 // installers. On Linux this builds a .deb; on Windows a .msi.
