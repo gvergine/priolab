@@ -7,6 +7,7 @@
 <?import javafx.scene.control.Menu?>
 <?import javafx.scene.control.MenuBar?>
 <?import javafx.scene.control.MenuItem?>
+<?import javafx.scene.control.Tooltip?>
 <?import javafx.scene.control.ProgressIndicator?>
 <?import javafx.scene.control.Separator?>
 <?import javafx.scene.control.SeparatorMenuItem?>
@@ -30,9 +31,7 @@
                     <Menu text="File">
                         <items>
                             <MenuItem text="New Project…" onAction="#onNewProject"/>
-                            <SeparatorMenuItem/>
                             <MenuItem text="Open…" onAction="#onOpen"/>
-                            <MenuItem text="Save" onAction="#onSave"/>
                             <SeparatorMenuItem/>
                             <MenuItem text="Exit" onAction="#onExit"/>
                         </items>
@@ -64,8 +63,33 @@
                         </ImageView>
                     </graphic>
                 </Button>
-                <Button fx:id="importButton" text="Import" minWidth="-Infinity" onAction="#onImport"/>
-                <ProgressIndicator fx:id="importProgress" prefWidth="20" prefHeight="20"
+                <Button fx:id="loadButton" text="Load" minWidth="-Infinity"
+                        onAction="#onConnectorLoad">
+                    <graphic>
+                        <ImageView fx:id="loadIcon" preserveRatio="true">
+                            <image>
+                                <Image url="@../img/load.png"/>
+                            </image>
+                        </ImageView>
+                    </graphic>
+                    <tooltip>
+                        <Tooltip text="Load the items from the connector (operation=load)"/>
+                    </tooltip>
+                </Button>
+                <Button fx:id="saveButton" text="Save" minWidth="-Infinity"
+                        onAction="#onConnectorSave">
+                    <graphic>
+                        <ImageView fx:id="saveIcon" preserveRatio="true">
+                            <image>
+                                <Image url="@../img/save.png"/>
+                            </image>
+                        </ImageView>
+                    </graphic>
+                    <tooltip>
+                        <Tooltip text="Save the items back through the connector (operation=save)"/>
+                    </tooltip>
+                </Button>
+                <ProgressIndicator fx:id="connectorProgress" prefWidth="20" prefHeight="20"
                                    visible="false" managed="false"/>
             </HBox>
 
@@ -88,7 +112,19 @@
                         </ImageView>
                     </graphic>
                 </Button>
-                <Button fx:id="exportButton" text="Export" minWidth="-Infinity" onAction="#onExport"/>
+                <Button fx:id="exportButton" text="Export" minWidth="-Infinity"
+                        onAction="#onExport">
+                    <graphic>
+                        <ImageView fx:id="exportIcon" preserveRatio="true">
+                            <image>
+                                <Image url="@../img/document.png"/>
+                            </image>
+                        </ImageView>
+                    </graphic>
+                    <tooltip>
+                        <Tooltip text="Produce a file from the items with the exporter — nothing comes back"/>
+                    </tooltip>
+                </Button>
                 <ProgressIndicator fx:id="exportProgress" prefWidth="20" prefHeight="20"
                                    visible="false" managed="false"/>
             </HBox>

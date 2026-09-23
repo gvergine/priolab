@@ -10,7 +10,6 @@ version = '1.0.0'
 ext {
     javafxVersion = '21.0.4'
     jacksonVersion = '2.18.2'
-    sqliteVersion = '3.46.1.0'
 }
 
 java {
@@ -30,7 +29,6 @@ javafx {
 
 dependencies {
     implementation "com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}"
-    implementation "org.xerial:sqlite-jdbc:${sqliteVersion}"
 }
 
 application {
@@ -53,17 +51,6 @@ tasks.named('compileJava') {
 jlink {
     imageZip = layout.buildDirectory.file("distributions/priolab-${javafx.platform.classifier}.zip")
     options = ['--strip-debug', '--compress', 'zip-6', '--no-header-files', '--no-man-pages']
-
-    // sqlite-jdbc is a non-modular (automatic) jar; merge it into the app image.
-    forceMerge('sqlite-jdbc')
-    mergedModule {
-        requires 'java.sql'
-        requires 'java.naming'
-        // A named module's META-INF/services is ignored: without this clause the
-        // image resolves no JDBC driver and DriverManager fails with
-        // "No suitable driver found for jdbc:sqlite:".
-        provides 'java.sql.Driver' with 'org.sqlite.JDBC'
-    }
 
     launcher {
         name = 'priolab'

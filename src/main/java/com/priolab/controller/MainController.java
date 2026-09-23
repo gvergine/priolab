@@ -2,6 +2,7 @@ package com.priolab.controller;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.priolab.App;
 import com.priolab.config.ConfigManager;
@@ -47,19 +48,26 @@ import java.util.Locale;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
+import java.util.function.IntConsumer;
 
 /**
  * Main window controller. Owns the currently open {@link Document}, drives the
- * File menu (new/open/save) and keeps the title/status in sync, prompting to
- * save whenever unsaved edits would be lost.
+ * File menu (new/open) and keeps the title/status in sync.
  *
- * <p>It also owns the top bar's two program groups — the <b>connector</b>
- * (Import) and the <b>exporter</b> (Export). Both are discovered the same way
- * from their own configured directory, and both are launched with their
- * per-project settings in the environment; they differ only in the direction
- * the items flow: a connector prints them on stdout, an exporter is fed them on
- * stdin (see {@link PluginKind}).
+ * <p>It also owns the top bar's two program groups:
+ *
+ * <ul>
+ *   <li>the <b>connector</b>, which is where the items live — <b>Load</b> runs
+ *       it with {@code operation=load} and reads the JSON array it prints,
+ *       <b>Save</b> runs it with {@code operation=save} and feeds the same
+ *       array to its stdin;</li>
+ *   <li>the <b>exporter</b>, a one-way sink that turns the same array into a
+ *       file (a spreadsheet, a PDF) and gives nothing back.</li>
+ * </ul>
+ *
+ * Both kinds are discovered the same way from their own configured directory
+ * and launched with their per-project settings in the environment (see
+ * {@link PluginKind}).
  */
 public class MainController {
 
@@ -81,19 +89,27 @@ public class MainController {
     @FXML
     private TextArea logArea;
     @FXML
-    private Button importButton;
+    private Button loadButton;
+    @FXML
+    private ImageView loadIcon;
+    @FXML
+    private Button saveButton;
+    @FXML
+    private ImageView saveIcon;
     @FXML
     private Button connectorSettingsButton;
     @FXML
     private ImageView connectorSettingsIcon;
     @FXML
-    private ProgressIndicator importProgress;
+    private ProgressIndicator connectorProgress;
     @FXML
     private HBox connectorBar;
     @FXML
     private ComboBox<String> connectorCombo;
     @FXML
     private Button exportButton;
+    @FXML
+    private ImageView exportIcon;
     @FXML
     private Button exporterSettingsButton;
     @FXML
@@ -122,12 +138,12 @@ public class MainController {
 
     private final ObjectMapper jsonMapper = new ObjectMapper();
 
-    /** Phases of the connector's stdout as a run is read. */
-    private enum RunPhase { IDLE, AWAIT_COUNT, READ_ITEMS, DONE }
-
-    private RunPhase runPhase = RunPhase.IDLE;
-    private int itemsRemaining;
-    private List<PrioItem> collectedItems;
+    /**
+     * Everything a load's stdout produced. A connector prints one JSON array
+     * for the whole run, which may well be pretty-printed across many lines, so
+     * the text is collected here and parsed once the process exits.
+     */
+    private StringBuilder loadOutput;
 
     public void init(App app, ConfigManager configManager) {
         this.app = app;
@@ -141,7 +157,33 @@ public class MainController {
         installZoom();
         sizeWithFont(connectorSettingsIcon, connectorSettingsButton);
         sizeWithFont(exporterSettingsIcon, exporterSettingsButton);
+        sizeWithFont(loadIcon, loadButton);
+        sizeWithFont(saveIcon, saveButton);
+        sizeWithFont(exportIcon, exportButton);
         setStatus("Ready — connectors: " + connectorsDir + " · exporters: " + exportersDir);
+        reopenLastProject();
+    }
+
+    /**
+     * Reopen the project that was open when PrioLab last exited. The project
+     * file holds only the connector / exporter choice and their settings, so
+     * this is a convenience, never a source of items: those come from an import.
+     */
+    private void reopenLastProject() {
+        String last = configManager.get().getLastProjectFile();
+        if (last == null || last.isBlank()) {
+            return;
+        }
+        Path path = Paths.get(last);
+        if (!Files.isRegularFile(path)) {
+            return;
+        }
+        try {
+            adoptDocument(Document.open(path));
+            setStatus("Opened " + path.toAbsolutePath());
+        } catch (Exception e) {
+            appendLog("[could not reopen " + path + ": " + e.getMessage() + "]");
+        }
     }
 
     /**
@@ -208,106 +250,91 @@ public class MainController {
 
     @FXML
     private void onNewProject() {
-        if (!maybeSaveCurrent()) {
+        if (!confirmDiscardItems()) {
             return;
         }
-        NewProjectController.Result result;
-        try {
-            FXMLLoader loader = new FXMLLoader(
-                    getClass().getResource("/com/priolab/fxml/newproject.fxml"));
-            Parent root = loader.load();
-            NewProjectController controller = loader.getController();
-
-            Stage dialog = new Stage();
-            dialog.initOwner(app.getStage());
-            dialog.initModality(Modality.APPLICATION_MODAL);
-            dialog.setTitle("New Project");
-            App.applyIcon(dialog);
-            Scene scene = new Scene(root, 480, 300);
-            scene.getStylesheets().add(
-                    getClass().getResource("/com/priolab/css/app.css").toExternalForm());
-            dialog.setScene(scene);
-            controller.setStage(dialog);
-            dialog.showAndWait();
-
-            result = controller.getResult();
-        } catch (IOException e) {
-            error("Failed to open the New Project dialog:\n" + e.getMessage());
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("New Project");
+        chooser.setInitialFileName("project.json");
+        chooser.getExtensionFilters().add(
+                new FileChooser.ExtensionFilter("PrioLab project", "*.json"));
+        File file = chooser.showSaveDialog(app.getStage());
+        if (file == null) {
             return;
         }
-        if (result == null) {
-            return; // cancelled
+        Path path = file.toPath();
+        if (!path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".json")) {
+            path = path.resolveSibling(path.getFileName() + ".json");
         }
-
         try {
-            Path parent = result.file().getParent();
-            if (parent != null) {
-                Files.createDirectories(parent);
-            }
-            adoptDocument(Document.create(result.file(), result.name()));
-            setStatus("Created project \"" + result.name() + "\" — "
-                    + result.file().toAbsolutePath());
+            adoptDocument(Document.create(path));
+            setStatus("Created " + path.toAbsolutePath());
         } catch (Exception e) {
-            error("Failed to create project:\n" + e.getMessage());
+            error("Failed to create the project file:\n" + e.getMessage());
         }
     }
 
     @FXML
     private void onOpen() {
-        if (!maybeSaveCurrent()) {
+        if (!confirmDiscardItems()) {
             return;
         }
         FileChooser chooser = new FileChooser();
         chooser.setTitle("Open Project");
-        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(
-                "SQLite Database", "*.sqlite3", "*.sqlite", "*.db"));
+        chooser.getExtensionFilters().add(
+                new FileChooser.ExtensionFilter("PrioLab project", "*.json"));
         File file = chooser.showOpenDialog(app.getStage());
         if (file == null) {
             return;
         }
         try {
             adoptDocument(Document.open(file.toPath()));
-            setStatus("Opened: " + file.getAbsolutePath());
+            setStatus("Opened " + file.getAbsolutePath());
         } catch (Exception e) {
-            error("Failed to open project:\n" + e.getMessage());
+            error("Failed to open the project file:\n" + e.getMessage());
         }
-    }
-
-    @FXML
-    private void onSave() {
-        if (document == null) {
-            setStatus("Nothing to save — open or create a project first.");
-            return;
-        }
-        saveCurrent();
     }
 
     @FXML
     private void onExit() {
-        if (!maybeSaveCurrent()) {
+        if (!confirmDiscardItems()) {
             return;
         }
         shutdown();
         Platform.exit();
     }
 
-    /** Wired as the window close handler; cancels the close on unsaved edits. */
+    /** Wired as the window close handler; cancels the close on un-exported items. */
     public void handleCloseRequest(WindowEvent event) {
-        if (!maybeSaveCurrent()) {
+        if (!confirmDiscardItems()) {
             event.consume();
             return;
         }
         shutdown();
     }
 
-    /** Release resources: stop any running connector and close the document. */
+    /**
+     * Release resources on the way out: stop anything still running and write
+     * the project file. There is no Save — the connector choice, the exporter
+     * choice and their settings are simply persisted here, silently.
+     */
     private void shutdown() {
         for (Connector plugin : running.values()) {
             plugin.close();
         }
         running.clear();
-        if (document != null) {
-            document.close();
+        saveProjectQuietly();
+    }
+
+    /** Write the current project file, reporting a failure only in the log. */
+    private void saveProjectQuietly() {
+        if (document == null) {
+            return;
+        }
+        try {
+            document.save();
+        } catch (Exception e) {
+            appendLog("[could not write " + document.getPath() + ": " + e.getMessage() + "]");
         }
     }
 
@@ -325,50 +352,86 @@ public class MainController {
         alert.showAndWait();
     }
 
-    /** Run the selected connector and load what it prints into the tables. */
+    /**
+     * Run the connector with {@code operation=load} and replace the items with
+     * the JSON array it prints. Whatever is on screen is overwritten, so the
+     * user is asked first.
+     */
     @FXML
-    private void onImport() {
+    private void onConnectorLoad() {
         Connector connector = selectedPlugin(PluginKind.CONNECTOR);
         if (connector == null) {
             return;
         }
-        appendLog("$ " + connector.getName() + " — " + connector.getManifest().getCommand());
+        if (!document.getItems().isEmpty() && !confirmReplaceItems()) {
+            return;
+        }
+        loadOutput = new StringBuilder();
+        setStatus("Loading from connector: " + connector.getName());
+        launch(PluginKind.CONNECTOR, connector,
+                environment(PluginKind.CONNECTOR, connector, Connector.OPERATION_LOAD),
+                null,
+                code -> finishLoad(connector, code));
+    }
 
-        // Reset the parse state and clear any previously loaded items.
-        runPhase = RunPhase.AWAIT_COUNT;
-        itemsRemaining = 0;
-        collectedItems = null;
+    /** Parse what the load printed and hand it to the document. */
+    private void finishLoad(Connector connector, int code) {
+        String output = loadOutput == null ? "" : loadOutput.toString();
+        loadOutput = null;
+        if (code != 0) {
+            setStatus(connector.getName() + " failed to load — exit code " + code + ".");
+            return;
+        }
+        List<PrioItem> items = parseItems(output);
+        if (items == null) {
+            setStatus("Load failed — see the console.");
+            return;
+        }
+        document.loadItems(items);
         if (documentController != null) {
-            documentController.setItems(List.of());
+            documentController.showItems();
         }
-
-        Map<String, String> env = buildEnvironment(PluginKind.CONNECTOR, connector);
-        logEnvironment(env);
-        try {
-            connector.run(
-                    env,
-                    line -> Platform.runLater(() -> handleConnectorLine(line)),
-                    line -> Platform.runLater(() -> appendLog(line)),
-                    code -> Platform.runLater(() -> {
-                        appendLog("[exited with code " + code + "]");
-                        running.remove(PluginKind.CONNECTOR);
-                        runPhase = RunPhase.IDLE;
-                        setRunning(PluginKind.CONNECTOR, false);
-                    }));
-            running.put(PluginKind.CONNECTOR, connector);
-            setRunning(PluginKind.CONNECTOR, true);
-            setStatus("Importing with connector: " + connector.getName());
-        } catch (Exception e) {
-            error("Failed to run connector:\n" + e.getMessage());
-            runPhase = RunPhase.IDLE;
-        }
+        setStatus("Loaded " + items.size() + " item(s) from " + connector.getName()
+                + (document.isDirty() ? " — they replaced what was shown before." : "."));
     }
 
     /**
-     * Run the selected exporter, feeding it the items currently shown — in
-     * priority order — as one JSON object per line on its stdin. Each object
-     * carries the item as the connector delivered it plus the four WSJF inputs
-     * and the computed WSJF ({@code null} while a score is blank).
+     * Run the connector with {@code operation=save}, feeding it the items as one
+     * JSON array on stdin. A clean exit means the connector has taken them, so
+     * the document is no longer dirty.
+     */
+    @FXML
+    private void onConnectorSave() {
+        Connector connector = selectedPlugin(PluginKind.CONNECTOR);
+        if (connector == null) {
+            return;
+        }
+        if (document.getItems().isEmpty()) {
+            setStatus("Nothing to save — load some items first.");
+            return;
+        }
+        int count = document.getItems().size();
+        setStatus("Saving through connector: " + connector.getName());
+        launch(PluginKind.CONNECTOR, connector,
+                environment(PluginKind.CONNECTOR, connector, Connector.OPERATION_SAVE),
+                itemsAsJson(),
+                code -> {
+                    if (code != 0) {
+                        setStatus(connector.getName() + " failed to save — exit code "
+                                + code + ".");
+                        return;
+                    }
+                    document.markSaved();
+                    setStatus("Saved " + count + " item(s) through " + connector.getName()
+                            + ".");
+                });
+    }
+
+    /**
+     * Run the selected exporter, feeding it the same JSON array on stdin. An
+     * exporter only ever produces a file — a spreadsheet, a PDF — and gives
+     * nothing back, so however it goes it says nothing about whether the
+     * connector holds the items: the dirty flag is left alone.
      */
     @FXML
     private void onExport() {
@@ -376,40 +439,52 @@ public class MainController {
         if (exporter == null) {
             return;
         }
-        List<ScoredItem> items = documentController == null
-                ? List.of() : documentController.getPrioritizedItems();
-        if (items.isEmpty()) {
-            setStatus("Nothing to export — import some items first.");
+        if (document.getItems().isEmpty()) {
+            setStatus("Nothing to export — load some items first.");
             return;
         }
-        List<String> lines = new ArrayList<>(items.size());
-        for (ScoredItem item : items) {
-            lines.add(toExportJson(item));
-        }
+        int count = document.getItems().size();
+        setStatus("Exporting with: " + exporter.getName());
+        launch(PluginKind.EXPORTER, exporter,
+                environment(PluginKind.EXPORTER, exporter, null),
+                itemsAsJson(),
+                code -> setStatus(code == 0
+                        ? "Exported " + count + " item(s) through " + exporter.getName() + "."
+                        : exporter.getName() + " failed — exit code " + code + "."));
+    }
 
-        appendLog("$ " + exporter.getName() + " — " + exporter.getManifest().getCommand());
-        Map<String, String> env = buildEnvironment(PluginKind.EXPORTER, exporter);
+    /**
+     * Start one program and wire its output to the console. stdout is also
+     * collected while an import is in flight; {@code onExit} runs on the FX
+     * thread once the process is gone and the UI has been released.
+     */
+    private void launch(PluginKind kind, Connector plugin, Map<String, String> env,
+                        String stdin, IntConsumer onExit) {
+        appendLog("$ " + plugin.getName() + " — " + plugin.getManifest().getCommand());
         logEnvironment(env);
-        appendLog("[writing " + lines.size() + " item(s) to stdin]");
+        if (stdin != null) {
+            appendLog("[writing " + document.getItems().size() + " item(s) to stdin]");
+        }
         try {
-            exporter.run(
-                    env,
-                    lines,
-                    line -> Platform.runLater(() -> appendLog(line)),
+            plugin.run(env, stdin,
+                    line -> Platform.runLater(() -> {
+                        appendLog(line);
+                        if (loadOutput != null) {
+                            loadOutput.append(line).append('\n');
+                        }
+                    }),
                     line -> Platform.runLater(() -> appendLog(line)),
                     code -> Platform.runLater(() -> {
                         appendLog("[exited with code " + code + "]");
-                        running.remove(PluginKind.EXPORTER);
-                        setRunning(PluginKind.EXPORTER, false);
-                        setStatus(code == 0
-                                ? "Exported " + lines.size() + " item(s)."
-                                : "Exporter failed with exit code " + code + ".");
+                        running.remove(kind);
+                        setRunning(kind, false);
+                        onExit.accept(code);
                     }));
-            running.put(PluginKind.EXPORTER, exporter);
-            setRunning(PluginKind.EXPORTER, true);
-            setStatus("Exporting with: " + exporter.getName());
+            running.put(kind, plugin);
+            setRunning(kind, true);
         } catch (Exception e) {
-            error("Failed to run exporter:\n" + e.getMessage());
+            loadOutput = null;
+            error("Failed to run " + kind.label() + ":\n" + e.getMessage());
         }
     }
 
@@ -441,104 +516,121 @@ public class MainController {
         return plugin;
     }
 
-    /** One JSON line for an exporter: the item, its four inputs and its WSJF. */
-    private String toExportJson(ScoredItem scored) {
-        PrioItem item = scored.item();
-        ObjectNode node = jsonMapper.createObjectNode();
-        node.put("id", item.id());
-        node.put("description", item.description());
-        node.put("url", item.url());
-        node.put("businessValue", scored.businessValueProperty().get());
-        node.put("timeCriticality", scored.timeCriticalityProperty().get());
-        node.put("riskReduction", scored.riskReductionProperty().get());
-        node.put("jobSize", scored.jobSizeProperty().get());
-        Double wsjf = scored.getWsjf();
-        // Two decimals, exactly the value the result table shows.
-        node.put("wsjf", wsjf == null ? null : Math.round(wsjf * 100) / 100.0);
-        return node.toString();
+    /**
+     * Parse a load: one JSON array of item objects, each carrying {@code id},
+     * {@code description}, {@code url} and the four mandatory score keys.
+     * Returns {@code null} when the output is not usable at all; individual
+     * problems are logged and the item kept with blanks.
+     */
+    private List<PrioItem> parseItems(String output) {
+        String text = output.trim();
+        if (text.isEmpty()) {
+            appendLog("[the connector printed nothing on stdout]");
+            return null;
+        }
+        JsonNode root;
+        try {
+            root = jsonMapper.readTree(text);
+        } catch (IOException e) {
+            appendLog("[the connector's output is not valid JSON: " + e.getMessage() + "]");
+            return null;
+        }
+        if (root == null || !root.isArray()) {
+            appendLog("[expected a JSON array of items]");
+            return null;
+        }
+        List<PrioItem> items = new ArrayList<>();
+        for (JsonNode node : root) {
+            if (!node.isObject()) {
+                appendLog("[skipped an entry that is not a JSON object]");
+                continue;
+            }
+            String id = node.path("id").asText("");
+            items.add(new PrioItem(
+                    id,
+                    node.path("description").asText(""),
+                    node.path("url").asText(""),
+                    score(node, PrioItem.KEY_UBV, id),
+                    score(node, PrioItem.KEY_TC, id),
+                    score(node, PrioItem.KEY_RROE, id),
+                    score(node, PrioItem.KEY_JS, id)));
+        }
+        return items;
     }
 
     /**
-     * Read the connector's stdout as it arrives (on the FX thread): the first
-     * non-blank line is the number of items, followed by that many JSON item
-     * objects. Anything the connector prints afterwards is only logged.
+     * One score off a loaded item: {@code null}, or a string holding the
+     * number. The key is mandatory, so a missing one is worth saying out loud
+     * even though the item is still taken.
      */
-    private void handleConnectorLine(String line) {
-        appendLog(line);
-        String trimmed = line.trim();
-        switch (runPhase) {
-            case AWAIT_COUNT -> {
-                if (trimmed.isEmpty()) {
-                    return;
-                }
-                try {
-                    itemsRemaining = Integer.parseInt(trimmed);
-                } catch (NumberFormatException e) {
-                    appendLog("[expected an item count but got: " + line + "]");
-                    runPhase = RunPhase.DONE;
-                    return;
-                }
-                collectedItems = new ArrayList<>();
-                if (itemsRemaining <= 0) {
-                    publishItems();
-                    runPhase = RunPhase.DONE;
-                } else {
-                    runPhase = RunPhase.READ_ITEMS;
-                }
-            }
-            case READ_ITEMS -> {
-                if (trimmed.isEmpty()) {
-                    return;
-                }
-                PrioItem item = parseItem(trimmed);
-                if (item != null) {
-                    collectedItems.add(item);
-                }
-                if (--itemsRemaining <= 0) {
-                    publishItems();
-                    runPhase = RunPhase.DONE;
-                }
-            }
-            default -> {
-                // IDLE / DONE: nothing to parse, output is just logged.
-            }
+    private Integer score(JsonNode node, String key, String id) {
+        if (!node.has(key)) {
+            appendLog("[" + id + ": missing \"" + key + "\" — treated as blank]");
+            return null;
         }
-    }
-
-    /** Parse one item JSON object, or {@code null} (logging) if it is malformed. */
-    private PrioItem parseItem(String line) {
+        JsonNode value = node.get(key);
+        if (value.isNull()) {
+            return null;
+        }
+        String text = value.asText("").trim();
+        if (text.isEmpty()) {
+            return null;
+        }
         try {
-            JsonNode node = jsonMapper.readTree(line);
-            return new PrioItem(
-                    node.path("id").asText(""),
-                    node.path("description").asText(""),
-                    node.path("url").asText(""));
-        } catch (IOException e) {
-            appendLog("[invalid item JSON: " + e.getMessage() + "]");
+            return Integer.valueOf(text);
+        } catch (NumberFormatException e) {
+            appendLog("[" + id + ": \"" + key + "\" is not a number (" + text
+                    + ") — treated as blank]");
             return null;
         }
     }
 
-    /** Push the collected items into the split lists and update the status. */
-    private void publishItems() {
-        List<PrioItem> items = collectedItems == null ? List.of() : collectedItems;
-        if (documentController != null) {
-            documentController.setItems(items);
+    /**
+     * The items as one JSON array, in priority order, for whatever reads them
+     * on stdin — a connector save or an exporter. Scores go out the way they
+     * came in: a string holding the number, or {@code null}.
+     */
+    private String itemsAsJson() {
+        ArrayNode array = jsonMapper.createArrayNode();
+        List<ScoredItem> ordered = documentController == null
+                ? List.copyOf(document.getItems()) : documentController.getPrioritizedItems();
+        for (ScoredItem scored : ordered) {
+            PrioItem item = scored.item();
+            ObjectNode node = array.addObject();
+            node.put("id", item.id());
+            node.put("description", item.description());
+            node.put("url", item.url());
+            putScore(node, PrioItem.KEY_UBV, scored.businessValueProperty().get());
+            putScore(node, PrioItem.KEY_TC, scored.timeCriticalityProperty().get());
+            putScore(node, PrioItem.KEY_RROE, scored.riskReductionProperty().get());
+            putScore(node, PrioItem.KEY_JS, scored.jobSizeProperty().get());
         }
-        setStatus("Loaded " + items.size() + " item(s) to prioritize.");
+        return array.toString();
+    }
+
+    private static void putScore(ObjectNode node, String key, Integer value) {
+        if (value == null) {
+            node.putNull(key);
+        } else {
+            node.put(key, String.valueOf(value));
+        }
     }
 
     /**
      * The environment the command is launched with: one variable per manifest
      * key, named exactly like the key and holding the value configured for this
-     * project (empty when the user has not set one). They are added to the
-     * environment PrioLab itself was started with.
+     * project (empty when the user has not set one), plus {@code operation} for
+     * a connector. They are added to the environment PrioLab itself was started
+     * with.
      */
-    private Map<String, String> buildEnvironment(PluginKind kind, Connector plugin) {
+    private Map<String, String> environment(PluginKind kind, Connector plugin, String operation) {
         Map<String, String> env = new LinkedHashMap<>();
         for (String key : plugin.getKeys()) {
             String value = document.getSetting(kind, plugin.getName(), key);
             env.put(key, value == null ? "" : value);
+        }
+        if (operation != null) {
+            env.put(Connector.ENV_OPERATION, operation);
         }
         return env;
     }
@@ -561,7 +653,7 @@ public class MainController {
         contentPane.setDisable(busy);
 
         ProgressIndicator spinner =
-                kind == PluginKind.CONNECTOR ? importProgress : exportProgress;
+                kind == PluginKind.CONNECTOR ? connectorProgress : exportProgress;
         spinner.setVisible(busy);
         spinner.setManaged(busy);
     }
@@ -640,13 +732,14 @@ public class MainController {
     /** Replace the current document with {@code next}, wiring up the editor. */
     private void adoptDocument(Document next) {
         if (document != null) {
+            saveProjectQuietly();
             connectorCombo.valueProperty().unbindBidirectional(
                     document.selectedProperty(PluginKind.CONNECTOR));
             exporterCombo.valueProperty().unbindBidirectional(
                     document.selectedProperty(PluginKind.EXPORTER));
-            document.close();
         }
         document = next;
+        rememberProject(next.getPath());
         try {
             FXMLLoader loader = new FXMLLoader(
                     getClass().getResource("/com/priolab/fxml/document.fxml"));
@@ -673,44 +766,51 @@ public class MainController {
         updateTitle();
     }
 
-    /** Persist the current document; returns true on success. */
-    private boolean saveCurrent() {
-        if (document == null) {
-            return true;
-        }
+    /** Remember this project so the next start reopens it. */
+    private void rememberProject(Path path) {
         try {
-            document.save();
-            updateTitle();
-            setStatus("Saved: " + document.getPath().toAbsolutePath());
-            return true;
+            configManager.get().setLastProjectFile(path.toAbsolutePath().toString());
+            configManager.save(configManager.get());
         } catch (Exception e) {
-            error("Failed to save:\n" + e.getMessage());
-            return false;
+            appendLog("[could not record the last project: " + e.getMessage() + "]");
         }
     }
 
     /**
-     * If the current document has unsaved edits, ask what to do. Returns true if
-     * the caller may proceed (saved or discarded), false if the user cancelled.
+     * Ask before a load throws away what is on screen. The items only exist in
+     * memory until the connector saves them, so this is the one warning that
+     * matters.
      */
-    private boolean maybeSaveCurrent() {
+    private boolean confirmReplaceItems() {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION,
+                "Loading replaces the " + document.getItems().size()
+                        + " item(s) currently shown"
+                        + (document.isDirty() ? ", including changes that have not been "
+                                + "saved" : "")
+                        + ".\n\nContinue?",
+                ButtonType.OK, ButtonType.CANCEL);
+        alert.setHeaderText(null);
+        alert.setTitle("Replace items");
+        App.applyIcon(alert);
+        return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
+    }
+
+    /**
+     * Ask before closing a document whose items have not been saved. Only the
+     * connector can take them, so the choice is to go on or stay.
+     */
+    private boolean confirmDiscardItems() {
         if (document == null || !document.isDirty()) {
             return true;
         }
         Alert alert = new Alert(Alert.AlertType.CONFIRMATION,
-                "Save changes to \"" + displayName() + "\" before continuing?",
-                ButtonType.YES, ButtonType.NO, ButtonType.CANCEL);
+                "The items in \"" + document.getName() + "\" have changes that have not "
+                        + "been saved through the connector.\n\nContinue and lose them?",
+                ButtonType.OK, ButtonType.CANCEL);
         alert.setHeaderText(null);
-        alert.setTitle("Unsaved Changes");
+        alert.setTitle("Not saved");
         App.applyIcon(alert);
-        Optional<ButtonType> choice = alert.showAndWait();
-        if (choice.isEmpty() || choice.get() == ButtonType.CANCEL) {
-            return false;
-        }
-        if (choice.get() == ButtonType.YES) {
-            return saveCurrent();
-        }
-        return true; // NO -> discard
+        return alert.showAndWait().filter(ButtonType.OK::equals).isPresent();
     }
 
     private List<String> pluginNames(PluginKind kind) {
@@ -727,23 +827,14 @@ public class MainController {
         }
     }
 
-    private String displayName() {
-        if (document == null) {
-            return "";
-        }
-        if (document.getName() != null && !document.getName().isBlank()) {
-            return document.getName();
-        }
-        return document.getPath().getFileName().toString();
-    }
-
+    /** The title is the project file's name, with a * while items are unsaved. */
     private void updateTitle() {
         if (document == null) {
             app.getStage().setTitle("PrioLab");
             return;
         }
         app.getStage().setTitle(
-                "PrioLab — " + displayName() + (document.isDirty() ? " *" : ""));
+                "PrioLab — " + document.getName() + (document.isDirty() ? " *" : ""));
     }
 
     private void setStatus(String text) {

@@ -1,8 +1,6 @@
 package com.priolab.controller;
 
 import com.priolab.doc.Document;
-import com.priolab.model.ItemScore;
-import com.priolab.model.PrioItem;
 import com.priolab.model.ScoredItem;
 
 import javafx.application.HostServices;
@@ -22,7 +20,6 @@ import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
 import javafx.util.StringConverter;
 
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.function.Function;
@@ -73,65 +70,34 @@ public class DocumentController {
         buildLeftTable();
         buildRightTable();
         rightTable.setItems(rightItems);
+        showItems();
     }
 
     /**
-     * Replace the items shown in both tables with exactly what the connector
-     * returned. Items whose id already has a score stored in the project file
-     * come back with their dropdowns pre-filled.
+     * Show the document's items — exactly what the connector's last load
+     * returned, with the scores it delivered already in the dropdowns. The
+     * items belong to the {@link Document}; this only renders them.
      */
-    public void setItems(List<PrioItem> items) {
-        List<ScoredItem> scored = new ArrayList<>(items.size());
-        int order = 1;
-        for (PrioItem item : items) {
-            ScoredItem si = new ScoredItem(item, order++);
-            // Seed from the stored score first, so restoring it is not an edit.
-            applyStoredScore(si);
+    public void showItems() {
+        List<ScoredItem> items = List.copyOf(document.getItems());
+        for (ScoredItem si : items) {
             // Re-sort the result table whenever this item's WSJF changes.
             si.wsjfProperty().addListener((obs, oldVal, newVal) -> resortRight());
-            // Any later change is a user edit: write it back and mark dirty.
-            ChangeListener<Integer> persist = (obs, oldVal, newVal) -> storeScore(si);
-            si.businessValueProperty().addListener(persist);
-            si.timeCriticalityProperty().addListener(persist);
-            si.riskReductionProperty().addListener(persist);
-            si.jobSizeProperty().addListener(persist);
-            scored.add(si);
         }
-        leftTable.getItems().setAll(scored);
+        leftTable.getItems().setAll(items);
         // Replacing the items does not re-run an active sort, which would leave
         // the header claiming an order the rows do not have.
         leftTable.sort();
-        rightItems.setAll(scored);
+        rightItems.setAll(items);
         resortRight();
     }
 
     /**
      * The items as the result table shows them: WSJF descending, unscored last.
-     * This is what an export writes out, in this order.
+     * This is the order a save or an export writes them out in.
      */
     public List<ScoredItem> getPrioritizedItems() {
         return List.copyOf(rightItems);
-    }
-
-    /** Pre-fill an item's dropdowns from the score stored for its id, if any. */
-    private void applyStoredScore(ScoredItem si) {
-        ItemScore stored = document.getItemScore(si.item().id());
-        if (stored == null) {
-            return;
-        }
-        si.businessValueProperty().set(stored.businessValue());
-        si.timeCriticalityProperty().set(stored.timeCriticality());
-        si.riskReductionProperty().set(stored.riskReduction());
-        si.jobSizeProperty().set(stored.jobSize());
-    }
-
-    /** Write an item's current dropdown values into the document (marks it dirty). */
-    private void storeScore(ScoredItem si) {
-        document.setItemScore(si.item().id(), new ItemScore(
-                si.businessValueProperty().get(),
-                si.timeCriticalityProperty().get(),
-                si.riskReductionProperty().get(),
-                si.jobSizeProperty().get()));
     }
 
     // --- Table construction --------------------------------------------------

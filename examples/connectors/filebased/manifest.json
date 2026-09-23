@@ -1,0 +1,8 @@
+{
+    "name":"filebased",
+    "version":"1.0",
+    "author":"verginegiovanni@gmail.com",
+    "description":"show stuff from a file",
+    "keys":["file"],
+    "command":"python3 file_based_connector.py"
+}

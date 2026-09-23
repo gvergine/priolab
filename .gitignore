@@ -10,3 +10,5 @@ bin
 .project
 .classpath
 *.class
+# python
+**/__pycache__

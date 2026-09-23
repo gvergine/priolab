@@ -1,7 +1,6 @@
 module com.priolab {
     requires javafx.controls;
     requires javafx.fxml;
-    requires java.sql;
     requires com.fasterxml.jackson.databind;
 
     // FXML instantiates controllers and injects @FXML fields via reflection.
@@ -11,6 +10,7 @@ module com.priolab {
     // Jackson (de)serializes config POJOs and connector manifests via reflection.
     opens com.priolab.config to com.fasterxml.jackson.databind;
     opens com.priolab.connector to com.fasterxml.jackson.databind;
+    opens com.priolab.doc to com.fasterxml.jackson.databind;
 
     exports com.priolab;
 }

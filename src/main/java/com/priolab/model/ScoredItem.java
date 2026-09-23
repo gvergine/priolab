@@ -32,6 +32,12 @@ public class ScoredItem {
     public ScoredItem(PrioItem item, int order) {
         this.item = item;
         this.order = order;
+        // Seed from what the connector delivered. Callers attach their change
+        // listeners afterwards, so this is never seen as a user edit.
+        businessValue.set(item.ubv());
+        timeCriticality.set(item.tc());
+        riskReduction.set(item.rroe());
+        jobSize.set(item.js());
         this.wsjf = Bindings.createObjectBinding(() -> {
             Integer bv = businessValue.get();
             Integer tc = timeCriticality.get();
@@ -75,5 +81,16 @@ public class ScoredItem {
 
     public Double getWsjf() {
         return wsjf.getValue();
+    }
+
+    /**
+     * This item with its <em>current</em> scores folded back in — what a save
+     * sends out, and what the dirty check compares against the last synced
+     * state.
+     */
+    public PrioItem snapshot() {
+        return new PrioItem(item.id(), item.description(), item.url(),
+                businessValue.get(), timeCriticality.get(),
+                riskReduction.get(), jobSize.get());
     }
 }

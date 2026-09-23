@@ -2,9 +2,14 @@
 
 A JavaFX desktop application that helps the user prioritize *anything*. The
 things to prioritize come from **connectors** — external programs PrioLab runs
-with the project's settings in the environment, reading their result on
-stdout. The prioritized result goes back out through **exporters**, the same
-kind of program driven in the opposite direction.
+with the project's settings in the environment. A connector goes **both ways**:
+asked to *load* it prints the items as one JSON array on stdout, asked to
+*save* it reads that same array back on stdin. **Exporters** are the same kind
+of program wired one way only: they turn that array into a file — a
+spreadsheet, a PDF — and give nothing back.
+
+PrioLab stores no items of its own: **the connector is the storage**, which is
+why its two buttons say *Load* and *Save* while the exporter's says *Export*.
 
 ## Tech stack
 
@@ -13,8 +18,8 @@ kind of program driven in the opposite direction.
   (`./gradlew`) — the system-wide `gradle` is 4.4.1 and far too old.
 - **JavaFX 21.0.4** via the `org.openjfx.javafxplugin`, UI defined in **FXML**.
 - **Modular** app (`module-info.java`, module name `com.priolab`).
-- **Jackson** (`jackson-databind`) for JSON config.
-- **sqlite-jdbc** (xerial) for SQLite support.
+- **Jackson** (`jackson-databind`) for all JSON: the config, the project files
+  and the item payloads exchanged with connectors and exporters.
 - **badass-jlink** (`org.beryx.jlink`) for the runtime image + native installers
   (`jpackage`).
 
@@ -128,14 +133,19 @@ On startup PrioLab looks for `~/.priolab/config.json`:
 {
   "version": 1,
   "connectorsDir": "/home/user/.priolab/connectors",
-  "exportersDir": "/home/user/.priolab/exporters"
+  "exportersDir": "/home/user/.priolab/exporters",
+  "lastProjectFile": "/home/user/projects/roadmap.json"
 }
 ```
 
+`lastProjectFile` is written whenever a project is opened or created and read
+back at startup, so PrioLab reopens the project you were last in. A missing or
+deleted file is simply ignored and the app starts with no project.
+
 ### Connectors & exporters
-A connector (the **importer**) and an exporter are the *same kind of thing* —
-`model/PluginKind.java` names the two roles, and one `connector/Connector.java`
-implements both. Each is a **direct subdirectory** of its own configured
+A connector (which goes **both ways**) and an exporter (**out only**) are the
+*same kind of thing* — `model/PluginKind.java` names the two roles, and one
+`connector/Connector.java` runs both. Each is a **direct subdirectory** of its own configured
 directory (`connectorsDir` / `exportersDir`); the **directory name is the
 program's name**. A subdirectory is a valid connector
 only if it contains a **`manifest.json`** (`connector/ConnectorManifest.java`,
@@ -145,24 +155,24 @@ Jackson-mapped) with:
 - `command` (string) — the command PrioLab runs, **relative to the connector
   directory**,
 - `keys` (array of strings, defaults to empty) — the setting names the user
-  configures per project; their values are meant to live in a table of the
-  project's SQLite file.
+  configures per project; their values live in the project file and are passed
+  to the command as environment variables.
 
 `ConnectorManager.discover()` scans the direct subdirectories, parses/validates
 each `manifest.json`, and **skips invalid ones** (writing a note to stderr:
 missing manifest, name mismatch, or missing version/author/description/command).
 `MainController` keeps **one manager per kind**, each over its own directory.
 
-**Running:** `Connector.run(env, onLine, onErrorLine, onExit)` launches the
-manifest `command` as a child process with the connector directory as the
+**Running:** `Connector.run(env, stdin, onLine, onErrorLine, onExit)` launches
+the manifest `command` as a child process with the connector directory as the
 working directory. A relative program token (contains `/`, e.g. `./run.sh`) is
 resolved against the connector directory since Java resolves relative
 executables against the JVM's cwd, not `ProcessBuilder.directory`.
 
-**There is no handshake and nothing is ever written to the connector's stdin**
-(it is closed right after launch, so a connector that reads it sees EOF).
-Everything PrioLab has to say is in the environment; everything the connector
-has to say is on stdout.
+**There is no handshake.** `stdin` is either the whole JSON payload — written
+on its own daemon thread, then closed, so a program that reads only part of it
+cannot block PrioLab — or `null`, which closes stdin immediately so an
+importing connector sees EOF instead of hanging.
 
 **stdout and stderr are read separately**, each line by line on its own daemon
 thread: **stdout is the result** PrioLab parses, **stderr is diagnostics** that
@@ -171,109 +181,104 @@ without corrupting its output. The exit callback fires after stdout ends (and
 after a short join on the stderr reader, so trailing diagnostics still land
 before `[exited with code N]`).
 
-**Run protocol.** `MainController.onRunConnector()` runs the current document's
-selected connector:
+**Run protocol.** A connector is asked to do one of two things, and which one
+is in the environment:
 
 1. PrioLab launches `command` with **one environment variable per manifest
-   `key`, named exactly like the key**, holding the value configured for this
-   project (empty string when the user has not set one). These are *added* to
-   the environment PrioLab itself was started with, so `PATH` & co. are
-   inherited. A key named like an existing variable overrides it.
-2. The connector prints a **count** line (an integer N) as its first non-blank
-   stdout line, followed by **N** lines, each a **JSON object** with keys `id`,
-   `description`, `url` (parsed with Jackson into `model/PrioItem.java`; blank
-   lines are skipped, malformed objects are logged and skipped). Anything it
-   prints after that is only logged.
+   `key`**, named exactly like the key, holding the value configured for this
+   project (empty string when unset), **plus `operation`** — `load` or `save`
+   (`Connector.ENV_OPERATION` / `OPERATION_LOAD` / `OPERATION_SAVE`).
+   These are *added* to the environment PrioLab itself was started with, so
+   `PATH` & co. are inherited. A key named like an existing variable overrides it.
+2. **Load** (`operation=load`): the connector prints **one JSON array of
+   items** on stdout. PrioLab collects the whole of stdout and parses it when
+   the process exits — the array may be pretty-printed across as many lines as
+   the connector likes — then replaces the items with it. A non-zero exit code
+   leaves the current items alone.
+3. **Save** (`operation=save`): PrioLab writes that same array to the
+   connector's stdin and closes it. A **zero exit code means the connector has
+   taken the items**, which is what clears the dirty flag.
 
-The parse is a small state machine in `MainController` (`RunPhase`:
-`AWAIT_COUNT → READ_ITEMS → DONE`), fed by `handleConnectorLine`. The resulting
-items are handed to `DocumentController.setItems(...)`. While a connector runs,
-`setRunning(...)` locks the window down (see *Documents & editing*); the exit
-callback releases it. `shutdown()` kills the process on exit/close.
+An **exporter** is the save half wired to a different purpose: same launch,
+same array on stdin, **no `operation` variable** (it only ever does the one
+thing), and its exit code changes nothing in the document — a spreadsheet on
+disk says nothing about whether the connector still holds the items.
+
+**The item shape** is the whole contract, and it is the same in both
+directions:
+
+```json
+{"id": "Apple", "description": "Test task 1", "url": "http://…/Apple",
+ "UBV": "1", "TC": "2", "RROE": "3", "JS": "5"}
+```
+
+`id`, `description` and `url` are strings. The four score keys — **UBV**, **TC**,
+**RROE**, **JS** — are **mandatory** and hold either `null` or a *string* with
+the number. PrioLab parses them into nullable integers and writes them back out
+as strings, so a connector that copies them straight into its own storage gets
+back what it gave. A missing key, or one holding something that is not a number,
+is logged in the console and treated as blank rather than failing the load.
+Items go out in **priority order** (WSJF descending, unscored last); nothing
+else about the order is meaningful, since a connector matches items by `id`.
 
 The main window's **Console pane** (bottom of a vertical `SplitPane`, with a
 **Clear** button) shows the run: the command line, the environment PrioLab
 passed, then every stdout and stderr line, appended via `Platform.runLater`.
 
-A minimal connector is therefore just:
+`examples/connectors/filebased` is a complete connector in ~40 lines of Python:
+it keeps its own `db.json`, serves it on `operation=load` and writes the four
+scores back into it on `operation=save`.
 
-```python
-#!/usr/bin/env python3
-import json, os
-items = [{"id": "A-1", "description": "something", "url": os.getenv("baseurl", "")}]
-print(len(items), flush=True)
-for item in items:
-    print(json.dumps(item), flush=True)
-```
+### The project file
 
-**Export protocol.** `MainController.onExport()` is the mirror image:
-
-1. The exporter's command is launched exactly like a connector's — same
-   directory rules, same **environment variables** from its own manifest keys
-   and its own per-project settings.
-2. PrioLab then writes the items **currently shown**, in **priority order**
-   (the result table's order: WSJF descending, unscored last), **one JSON
-   object per line on the exporter's stdin**, and **closes stdin** so the
-   program sees end-of-file. There is no count line — the line order *is* the
-   priority.
-3. Its stdout and stderr are only logged to the console pane; PrioLab parses
-   nothing back.
-
-Each exported line carries the item as the connector delivered it plus the four
-WSJF inputs and the computed value (`null` wherever a dropdown is blank, and
-`wsjf` rounded to the two decimals the table shows):
+`File ▸ New Project…` and `File ▸ Open…` create or open a **`.json` project
+file** (`doc/Project.java`, Jackson-mapped, `FileChooser` in both cases — there
+is no separate dialog). **There is no Save.** The file holds only this:
 
 ```json
-{"id":"A-1","description":"…","url":"…","businessValue":8,"timeCriticality":5,
- "riskReduction":3,"jobSize":3,"wsjf":5.33}
+{
+  "version": 1,
+  "connector": "filebased",
+  "exporter": null,
+  "connectorSettings": { "filebased": { "file": "/home/me/db.json" } },
+  "exporterSettings": {}
+}
 ```
 
-Writing happens on its own daemon thread, so an exporter that reads only part of
-its input (or none) cannot block PrioLab; a broken pipe is reported in the log,
-not raised. **Export** is a no-op with a status message when nothing has been
-imported yet.
+— which connector and exporter the project uses and the values given to their
+manifest keys. **The items are not in it**: the connector loads them and takes
+them back on a save, so the project file only remembers how to reach them.
 
-A minimal exporter is therefore just:
-
-```python
-#!/usr/bin/env python3
-import json, os, sys
-with open(os.getenv("outfile"), "w") as out:
-    for line in sys.stdin:
-        item = json.loads(line)
-        out.write(f"{item['id']},{item['wsjf']}\n")
-```
-
-### SQLite
-`File ▸ Open…` / `File ▸ Save…` in the main window open/create a `.sqlite3`
-(also `.sqlite`, `.db`) file via `db/Database.java` (JDBC, `jdbc:sqlite:`). The
-driver is loaded through the JDBC `ServiceLoader`, so no explicit
-`requires org.xerial.sqlitejdbc` in `module-info` — only `requires java.sql`.
-`Database` also exposes a small `meta(key, value)` key/value table
-(`ensureSchema`, `getMeta`, `putMeta`) used to store project metadata, plus
-`connector_settings(connector, key, value)`,
-`exporter_settings(exporter, key, value)` and `item_scores(id, business_value,
-time_criticality, risk_reduction, job_size)`. The two settings tables are
-reached through one `PluginKind`-parameterized trio
-(`getAllSettings` / `putSetting` / `deleteSetting`), so a connector and an
-exporter that share a name keep separate settings. `ensureSchema()` is
-`CREATE TABLE IF NOT EXISTS` throughout, so opening an older project file just
-adds the missing tables.
-
-### New Project
-`File ▸ New Project…` opens a small **modal** wizard (`newproject.fxml` /
-`NewProjectController`) that requires a **name** and a **file location**. On
-finish, `Database.createProject(path, name)` opens/creates the SQLite file and
-initialises the `meta` table with `name` and `schema_version`
-(`Database.SCHEMA_VERSION`). Unlike the first-run wizard (a scene swap), this
-one is a separate `Stage` shown with `showAndWait()`; the controller exposes the
-chosen name+path via `getResult()` (null = cancelled).
+It is written **silently**: when the document is replaced and when the app exits
+(`MainController.shutdown()` → `saveProjectQuietly()`), never through a menu
+item, and editing any of it never marks the document dirty.
 
 ### Documents & editing
-An open project is a `doc/Document.java`: it owns the `Database`, holds the
-editable in-memory state, and tracks a JavaFX `dirty` property (in-memory value
-vs. what's on disk). `Document.create(file, name)` / `Document.open(file)` are
-the factories; `save()` writes back and clears dirty.
+An open project is a `doc/Document.java`: the `Project` file plus the items
+being prioritized. `Document.create(file)` / `Document.open(file)` are the
+factories, and `save()` writes the project file (silently — see above).
+
+**What `dirty` means here.** The project file is never at risk: it is saved on
+its own. The *items* are, because they only exist in memory until a connector
+takes them, so `dirty` tracks exactly that:
+
+- **loading** replaces the items and leaves the document **dirty only if the
+  load changed items that were already there**. Loading into an empty document,
+  or a load that returns exactly what is shown, leaves it clean;
+- **editing a score** dirties it, and editing it back does not;
+- a **successful connector save** (exit code 0) cleans it — the connector now
+  holds what is on screen;
+- the **exporter** never touches it, and neither does choosing a connector, an
+  exporter or editing their settings.
+
+`Document` keeps a `synced` snapshot of the items as the connector last gave or
+took them, plus an `importOverwrote` flag for the rule above;
+`recomputeDirty()` is `importOverwrote || !snapshot().equals(synced)`.
+
+Because the items cannot be saved anywhere except through a connector, **New /
+Open / Exit warn and offer to continue or stay** (`confirmDiscardItems()`), and
+a **load over existing items asks first** (`confirmReplaceItems()`) — it is the
+one action that silently throws work away.
 
 `MainController` owns the current `Document` and hosts the editor view
 (`document.fxml` / `DocumentController`) inside the center `contentPane`.
@@ -282,19 +287,26 @@ the factories; `save()` writes back and clears dirty.
 alongside the `MenuBar`), owned by `MainController`, not the document view. It
 holds **two identical groups**, connector first, exporter after a separator:
 - a `ComboBox` of that kind's discovered names, two-way bound to
-  `Document.selectedProperty(kind)` and persisted to `meta["connector"]` /
-  `meta["exporter"]`;
+  `Document.selectedProperty(kind)` and written into the project file's
+  `connector` / `exporter` field;
 - a **gear settings button** (`img/gear.png` as the button's `graphic` — a glyph
   like `⚙` was invisible on Linux and tiny on Windows; its `ImageView` is sized
   from the button's font, so it follows the zoom) that opens a modal dialog
   (`pluginsettings.fxml` /
   `PluginSettingsController`, shared by both kinds) with one text field per
   manifest **key**, seeded from and (on OK) written back into the document.
-  These key values are persisted per kind (see *SQLite*) and tracked by
-  `Document` (`getSetting` / `setSetting`, folded into the `dirty` flag). They
+  These key values live in the project file per kind
+  (`Document.getSetting` / `setSetting`) and never touch the `dirty` flag. They
   are the **environment variables** the command is launched with;
-- the action button — **Import** for the connector, **Export** for the exporter
-  — and its own progress spinner.
+- the action buttons. The **connector** has two, because it is the storage:
+  **Load** (`img/load.png`, arrow into a tray) runs it with `operation=load`,
+  **Save** (`img/save.png`, arrow out of a tray) with `operation=save`. The
+  **exporter** has one, **Export**, carrying a *page* icon
+  (`img/document.png`) rather than an arrow — a different shape, not just a
+  different direction, so the two are not confused at a glance. All three have
+  tooltips spelling out what they run, and their icons are sized from the
+  button font like the gear, so they follow the zoom. Each group has its own
+  progress spinner.
 
 Both bars are disabled until a project is open.
 
@@ -333,7 +345,7 @@ scoring state). Each row's `id` is a `Hyperlink` that opens the item's `url` via
   direction — leaves the unscored items last, like the result table; **Order**
   always takes you back to the connector's own sequence. Editing a score does
   **not** re-run the sort (rows would jump under the cursor mid-edit), but a new
-  import does, so the rows never contradict the header's sort arrow.
+  load does, so the rows never contradict the header's sort arrow.
   Rows that are not fully scored (WSJF still blank) are highlighted **light
   yellow** via the `:incomplete` pseudo-class (see `app.css`).
 - **WSJF** = `(BusinessValue + TimeCriticality + RiskReduction) / JobSize`,
@@ -347,32 +359,18 @@ scoring state). Each row's `id` is a `Hyperlink` that opens the item's `url` via
   list (`FXCollections.sort` + `refresh()`) on every change, so editing a score
   on the left instantly reorders the result on the right.
 
-**Score persistence.** The four dropdown values are stored per item **id** in the
-`item_scores` table — only the id and the four numbers, nothing else about the
-item. `Document` holds them as `id -> ItemScore` (`model/ItemScore.java`, a record
-of four nullable `Integer`s) in the same saved/edit pair used for connector
-settings, so:
+**Scores come from, and go back to, the connector.** A row's four dropdowns are
+seeded by the load (`ScoredItem` reads them off the `PrioItem` in its
+constructor, before any listener is attached, so seeding is not an edit) and are
+sent back on the next save. Nothing else stores them: an item the connector
+stops returning simply disappears, and a score PrioLab was never given starts
+blank.
 
-- editing any dropdown calls `Document.setItemScore(...)`, which **marks the
-  document dirty** (title gets a `*`, and the Yes/No/Cancel prompt guards
-  New/Open/Exit/close);
-- a score with all four values blank is normalised away and its row is deleted
-  on save;
-- `Document` keeps **every** stored score, not just the items of the last run, so
-  scores for items a run did not return are preserved and reappear when those
-  items come back.
-
-**A connector run shows exactly what the connector returned** — stored scores
-never add rows. `DocumentController.setItems(...)` seeds each item from
-`Document.getItemScore(id)` *before* attaching the write-back listeners, so
-restoring a score is not itself an edit and does not dirty the document; ids with
-no stored score simply start blank.
-
-Unsaved-changes handling: `New Project`, `Open`, `Exit`, and the window's close
-button all route through `MainController.maybeSaveCurrent()` (Yes/No/Cancel);
-the window title shows `PrioLab — <name>` with a trailing `*` while dirty. The
-close button is wired via `stage.setOnCloseRequest(controller::handleCloseRequest)`
-in `App.showMain()`.
+The window title is `PrioLab — <project file name>`, with a trailing `*` while
+the items are dirty; a document has no name of its own beyond its file. `New
+Project`, `Open`, `Exit` and the window's close button all route through
+`confirmDiscardItems()`, and the close button is wired via
+`stage.setOnCloseRequest(controller::handleCloseRequest)` in `App.showMain()`.
 
 ## Project layout
 
@@ -383,6 +381,7 @@ packaging/appimage/                AppImage assets
   AppRun                           entry point -> usr/bin/priolab
   priolab.desktop                  desktop entry (also used for the menu entry)
 packaging/windows/priolab.ico      app icon in Windows' own format (jpackage)
+examples/connectors/filebased/     a working connector (load + save) to copy
 src/main/java/module-info.java     module com.priolab
 src/main/java/com/priolab/
   App.java                         Application entry; chooses wizard vs main
@@ -392,21 +391,21 @@ src/main/java/com/priolab/
   connector/ConnectorManifest.java manifest.json POJO (name/version/author/…/keys)
   connector/ConnectorManager.java  discover connector subdirs in the config'd dir
   controller/WizardController.java first-run wizard
-  controller/NewProjectController.java  modal "new project" wizard
   controller/PluginSettingsController.java  modal key editor (connector or exporter)
   controller/MainController.java   main window, top bar, import/export runs, current Document
   controller/DocumentController.java    center split view: WSJF scoring + result tables
-  doc/Document.java                open project: DB + editable state + dirty
-  db/Database.java                 SQLite JDBC wrapper + meta / per-kind settings / scores
-  model/PrioItem.java              one item to prioritize (id/description/url)
-  model/ScoredItem.java            PrioItem + WSJF inputs + computed WSJF
-  model/ItemScore.java             the four stored WSJF inputs, keyed by item id
-  model/PluginKind.java            CONNECTOR (importer) vs EXPORTER
+  doc/Document.java                open project: project file + items + dirty
+  doc/Project.java                 the .json project file (Jackson bean)
+  model/PrioItem.java              one item: id/description/url + UBV/TC/RROE/JS
+  model/ScoredItem.java            PrioItem + editable WSJF inputs + computed WSJF
+  model/PluginKind.java            CONNECTOR (both ways) vs EXPORTER (one way)
 src/main/resources/com/priolab/
   img/priolab.png                  256x256 app icon (stage, jpackage, AppImage)
   img/gear.png                     settings-button icon
+  img/load.png                     Load button icon (arrow into a tray)
+  img/save.png                     Save button icon (arrow out of a tray)
+  img/document.png                 Export button icon (a page, not an arrow)
   fxml/wizard.fxml
-  fxml/newproject.fxml
   fxml/pluginsettings.fxml
   fxml/main.fxml
   fxml/document.fxml
@@ -416,29 +415,37 @@ src/main/resources/com/priolab/
 ## Module system notes (important)
 
 - `module-info.java` `opens` the controller package to `javafx.fxml` (FXML
-  reflection) and the config package to `com.fasterxml.jackson.databind`.
-- `sqlite-jdbc` is a non-modular (automatic) jar. The jlink config
-  `forceMerge('sqlite-jdbc')` folds it into the merged module; `mergedModule`
-  declares its `requires java.sql` / `requires java.naming`. If you add another
-  non-modular dependency and jlink fails, extend `forceMerge` / `mergedModule`
-  similarly.
-- `mergedModule` must also declare
-  `provides 'java.sql.Driver' with 'org.sqlite.JDBC'`. `ServiceLoader` ignores
-  `META-INF/services` inside a *named* module, so without that clause the merged
-  module is never service-bound into the image's module graph and every
-  `DriverManager.getConnection("jdbc:sqlite:…")` in the jlink/jpackage/AppImage
-  build fails with *"No suitable driver found"* — while `./gradlew run`, which
-  runs off the classpath-ish dev module path, works fine. Any future
-  service-provider dependency needs the same treatment.
+  reflection) and the `config`, `connector` and `doc` packages to
+  `com.fasterxml.jackson.databind`.
+- **Keep Jackson beans plain.** `doc/Project.java` once had two helper methods
+  taking a `PluginKind`; Jackson reflected on the enum and the whole load failed
+  with *"module com.priolab does not exports com.priolab.model"*. Mapping a kind
+  onto the project's fields belongs in `Document`, not in the bean. The same
+  applies to any future POJO: only plain getters and setters over `String`,
+  numbers and collections, or the module has to export more than it should.
+- Every dependency is modular now (JavaFX and Jackson), so the jlink config
+  needs no `forceMerge` / `mergedModule` block. If you ever add a non-modular
+  (automatic) jar and jlink fails, that is where it goes — together with a
+  `provides` clause for anything it publishes through `ServiceLoader`, which is
+  ignored inside a named module.
 
 ## Conventions
 
 - Keep the app modular — new packages that FXML or Jackson touch by reflection need
   matching `opens` in `module-info.java`.
-- The connector contract is *environment variables in, stdout out*; the exporter
-  contract is *environment variables in, JSON lines down stdin*. Keep them that
-  way: no handshake, nothing parsed out of stderr, nothing read back from an
-  exporter.
+- The contract is *environment variables in, one JSON array of items out or in*:
+  `operation=load` prints the array on stdout, `operation=save` reads it from
+  stdin, an exporter only ever reads it. Keep it that way — no handshake,
+  nothing parsed out of stderr, nothing read back from a save or an export —
+  and keep the item shape (`id`, `description`, `url` + the four mandatory
+  score keys) identical in both directions.
+- **Load/Save belong to the connector, Export to the exporter.** The connector
+  is persistence, so it borrows the vocabulary of a file; the exporter produces
+  an artifact nobody reads back. Do not reintroduce "import" or a second
+  "export" button.
+- PrioLab stores no items. If something needs to survive a restart and is not
+  the connector / exporter choice or their settings, it belongs in the
+  connector, not in the project file.
 - Connectors and exporters stay interchangeable in everything but direction —
   same manifest, same discovery, same settings dialog. Anything new that applies
   to one should be expressed per `PluginKind` rather than duplicated.

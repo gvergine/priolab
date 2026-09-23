@@ -13,6 +13,9 @@ public class Config {
     /** Absolute path to the directory that holds exporter subdirectories. */
     private String exportersDir;
 
+    /** The project file open when PrioLab last exited; reopened on startup. */
+    private String lastProjectFile;
+
     public int getVersion() {
         return version;
     }
@@ -35,5 +38,13 @@ public class Config {
 
     public void setExportersDir(String exportersDir) {
         this.exportersDir = exportersDir;
+    }
+
+    public String getLastProjectFile() {
+        return lastProjectFile;
+    }
+
+    public void setLastProjectFile(String lastProjectFile) {
+        this.lastProjectFile = lastProjectFile;
     }
 }

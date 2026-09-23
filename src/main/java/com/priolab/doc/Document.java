@@ -1,235 +1,225 @@
 package com.priolab.doc;
 
-import com.priolab.db.Database;
-import com.priolab.model.ItemScore;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.priolab.model.PluginKind;
+import com.priolab.model.PrioItem;
+import com.priolab.model.ScoredItem;
 
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.ReadOnlyBooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.beans.property.StringProperty;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
 
+import java.io.IOException;
+import java.io.Reader;
+import java.io.Writer;
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
 /**
- * An open PrioLab project: the SQLite {@link Database} plus the in-memory,
- * editable state layered on top of it.
+ * An open PrioLab project: the {@code .json} {@link Project} file plus the
+ * items currently being prioritized.
  *
- * <p>The editable fields are the names of the selected connector and exporter
- * (stored in the {@code meta} table under the keys {@code connector} and
- * {@code exporter}), the setting values the user assigns to their declared keys
- * (stored per {@link PluginKind} in the {@code connector_settings} /
- * {@code exporter_settings} tables) and the per-item WSJF scores keyed by item
- * id (stored in the {@code item_scores} table). The {@link #dirtyProperty() dirty}
- * flag tracks whether any in-memory value has diverged from what is persisted,
- * so the UI can prompt to save.
+ * <p>The two live on very different terms:
+ *
+ * <ul>
+ *   <li>The <b>project file</b> (selected connector / exporter and their
+ *       settings) is a convenience. Changing any of it never marks the document
+ *       dirty; it is written silently when the document is closed or the app
+ *       exits, and read back when it is opened again.</li>
+ *   <li>The <b>items</b> are never stored here at all. The connector loads
+ *       them and takes them back on a save, so
+ *       {@link #dirtyProperty() dirty} means "the items differ from what the
+ *       connector last gave us / last took from us" — the only thing that can
+ *       actually be lost.</li>
+ * </ul>
  */
-public class Document implements AutoCloseable {
+public final class Document {
 
-    private final Database database;
-    private final Path path;
-    private String name;
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .enable(SerializationFeature.INDENT_OUTPUT)
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
 
-    /** Selected plugin name per kind, each stored under its own {@code meta} key. */
+    private final Path file;
+    private final Project project;
+
+    private final ObservableList<ScoredItem> items = FXCollections.observableArrayList();
+
+    /** Selected connector / exporter name, two-way bound to the top bar. */
     private final Map<PluginKind, StringProperty> selected = new EnumMap<>(PluginKind.class);
 
     private final BooleanProperty dirty = new SimpleBooleanProperty(false);
 
-    /** The last selection written to (or read from) disk, for dirty comparison. */
-    private final Map<PluginKind, String> savedSelection = new EnumMap<>(PluginKind.class);
+    /** The items as the connector last loaded or accepted for saving. */
+    private List<PrioItem> synced = List.of();
 
-    /**
-     * Setting values per kind, {@code name -> (key -> value)}. Empty values are
-     * normalised away (absent), so the two maps compare cleanly for the dirty
-     * check. {@code savedSettings} mirrors what is on disk; {@code editSettings}
-     * holds the live in-memory edits.
-     */
-    private final Map<PluginKind, Map<String, Map<String, String>>> savedSettings =
-            new EnumMap<>(PluginKind.class);
-    private final Map<PluginKind, Map<String, Map<String, String>>> editSettings =
-            new EnumMap<>(PluginKind.class);
+    /** True when a load replaced items the connector has not taken back. */
+    private boolean loadOverwrote;
 
-    /**
-     * Per-item WSJF scores, {@code item id -> score}. Scores that carry nothing
-     * ({@link ItemScore#isEmpty()}) are normalised away, so the two maps compare
-     * cleanly for the dirty check. Holds every score in the project, not just
-     * the items the last connector run returned, so scores for items that are
-     * temporarily absent survive.
-     */
-    private Map<String, ItemScore> savedScores = new HashMap<>();
-    private Map<String, ItemScore> editScores = new HashMap<>();
-
-    private Document(Database database, Path path) {
-        this.database = database;
-        this.path = path;
+    private Document(Path file, Project project) {
+        this.file = file;
+        this.project = project;
         for (PluginKind kind : PluginKind.values()) {
-            StringProperty property = new SimpleStringProperty();
-            property.addListener((obs, oldVal, newVal) -> recomputeDirty());
+            StringProperty property = new SimpleStringProperty(selectedIn(project, kind));
+            // A selection is project-file state, not document content: remember
+            // it, but never let it touch the dirty flag.
+            property.addListener((obs, was, now) -> select(kind, now));
             selected.put(kind, property);
-            savedSettings.put(kind, new HashMap<>());
-            editSettings.put(kind, new HashMap<>());
         }
-    }
-
-    /** Create a brand-new project file and open it as a document. */
-    public static Document create(Path file, String name) throws SQLException {
-        Database db = new Database();
-        db.createProject(file, name);
-        Document doc = new Document(db, file);
-        doc.load();
-        return doc;
-    }
-
-    /** Open an existing SQLite file as a document (creating schema if needed). */
-    public static Document open(Path file) throws SQLException {
-        Database db = new Database();
-        db.open(file);
-        db.ensureSchema();
-        Document doc = new Document(db, file);
-        doc.load();
-        return doc;
-    }
-
-    /** (Re)load the editable state from disk and clear the dirty flag. */
-    private void load() throws SQLException {
-        this.name = database.getProjectName();
-        for (PluginKind kind : PluginKind.values()) {
-            String stored = database.getMeta(kind.label());
-            savedSelection.put(kind, stored);
-            selected.get(kind).set(stored);
-            savedSettings.put(kind, database.getAllSettings(kind));
-            editSettings.put(kind, deepCopy(savedSettings.get(kind)));
-        }
-        this.savedScores = database.getAllItemScores();
-        this.editScores = new HashMap<>(savedScores);
-        dirty.set(false);
-    }
-
-    /** Persist the in-memory edits back to the SQLite file. */
-    public void save() throws SQLException {
-        for (PluginKind kind : PluginKind.values()) {
-            String value = selected.get(kind).get();
-            database.putMeta(kind.label(), value);
-            savedSelection.put(kind, value);
-
-            // Upsert every current setting; delete any that were removed.
-            Map<String, Map<String, String>> edits = editSettings.get(kind);
-            for (var nameEntry : edits.entrySet()) {
-                for (var keyEntry : nameEntry.getValue().entrySet()) {
-                    database.putSetting(
-                            kind, nameEntry.getKey(), keyEntry.getKey(), keyEntry.getValue());
-                }
-            }
-            for (var nameEntry : savedSettings.get(kind).entrySet()) {
-                Map<String, String> current =
-                        edits.getOrDefault(nameEntry.getKey(), Map.of());
-                for (String key : nameEntry.getValue().keySet()) {
-                    if (!current.containsKey(key)) {
-                        database.deleteSetting(kind, nameEntry.getKey(), key);
-                    }
-                }
-            }
-            savedSettings.put(kind, deepCopy(edits));
-        }
-
-        // Same upsert-then-delete pass for the per-item scores.
-        for (var entry : editScores.entrySet()) {
-            database.putItemScore(entry.getKey(), entry.getValue());
-        }
-        for (String id : savedScores.keySet()) {
-            if (!editScores.containsKey(id)) {
-                database.deleteItemScore(id);
-            }
-        }
-        savedScores = new HashMap<>(editScores);
-
-        dirty.set(false);
-    }
-
-    /** The stored score for {@code itemId}, or {@code null} if it has none. */
-    public ItemScore getItemScore(String itemId) {
-        return editScores.get(itemId);
     }
 
     /**
-     * Record the WSJF scores for {@code itemId}. A score with nothing set is
-     * treated as no score at all. Updates the {@link #dirtyProperty() dirty} flag.
+     * Map a kind onto the project file's fields. {@link Project} is a plain
+     * Jackson bean on purpose — giving it {@code PluginKind}-typed helpers made
+     * Jackson try to reflect on the enum, which a named module does not export.
      */
-    public void setItemScore(String itemId, ItemScore score) {
-        if (score == null || score.isEmpty()) {
-            editScores.remove(itemId);
+    private static String selectedIn(Project project, PluginKind kind) {
+        return kind == PluginKind.CONNECTOR ? project.getConnector() : project.getExporter();
+    }
+
+    private void select(PluginKind kind, String name) {
+        if (kind == PluginKind.CONNECTOR) {
+            project.setConnector(name);
         } else {
-            editScores.put(itemId, score);
+            project.setExporter(name);
         }
-        recomputeDirty();
     }
 
-    /**
-     * The in-memory value assigned to {@code key} of the connector / exporter
-     * {@code name} ({@code ""} if unset).
-     */
-    public String getSetting(PluginKind kind, String name, String key) {
-        Map<String, String> forName = editSettings.get(kind).get(name);
-        String value = forName == null ? null : forName.get(key);
-        return value == null ? "" : value;
+    private Map<String, Map<String, String>> settings(PluginKind kind) {
+        return kind == PluginKind.CONNECTOR
+                ? project.getConnectorSettings() : project.getExporterSettings();
     }
 
-    /**
-     * Assign a value to {@code key} of the connector / exporter {@code name}.
-     * Blank values are treated as unset. Updates the
-     * {@link #dirtyProperty() dirty} flag.
-     */
-    public void setSetting(PluginKind kind, String name, String key, String value) {
-        Map<String, Map<String, String>> edits = editSettings.get(kind);
-        if (value == null || value.isEmpty()) {
-            Map<String, String> forName = edits.get(name);
-            if (forName != null) {
-                forName.remove(key);
-                if (forName.isEmpty()) {
-                    edits.remove(name);
+    /** Start a new project at {@code file}, writing it out right away. */
+    public static Document create(Path file) throws IOException {
+        Path parent = file.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        Document document = new Document(file, new Project());
+        document.save();
+        return document;
+    }
+
+    /** Open an existing project file (an absent or empty one starts fresh). */
+    public static Document open(Path file) throws IOException {
+        Project project = new Project();
+        if (Files.isRegularFile(file) && Files.size(file) > 0) {
+            try (Reader reader = Files.newBufferedReader(file)) {
+                Project read = MAPPER.readValue(reader, Project.class);
+                if (read != null) {
+                    project = read;
                 }
             }
-        } else {
-            edits.computeIfAbsent(name, n -> new HashMap<>()).put(key, value);
         }
-        recomputeDirty();
+        return new Document(file, project);
     }
 
-    private void recomputeDirty() {
-        boolean changed = !editScores.equals(savedScores);
-        for (PluginKind kind : PluginKind.values()) {
-            changed |= !Objects.equals(selected.get(kind).get(), savedSelection.get(kind))
-                    || !editSettings.get(kind).equals(savedSettings.get(kind));
+    /** Write the project file. Callers do this silently — there is no Save. */
+    public void save() throws IOException {
+        try (Writer writer = Files.newBufferedWriter(file)) {
+            MAPPER.writeValue(writer, project);
         }
-        dirty.set(changed);
-    }
-
-    private static Map<String, Map<String, String>> deepCopy(
-            Map<String, Map<String, String>> source) {
-        Map<String, Map<String, String>> copy = new HashMap<>();
-        for (var entry : source.entrySet()) {
-            copy.put(entry.getKey(), new HashMap<>(entry.getValue()));
-        }
-        return copy;
-    }
-
-    public String getName() {
-        return name;
     }
 
     public Path getPath() {
-        return path;
+        return file;
+    }
+
+    /** The document's name: the project file's own name. */
+    public String getName() {
+        return file.getFileName().toString();
+    }
+
+    public ObservableList<ScoredItem> getItems() {
+        return items;
+    }
+
+    /**
+     * Replace the items with what a connector load returned.
+     *
+     * <p>The result is dirty only when the load <em>changed</em> items that were
+     * already there: loading into an empty document, or a load that returns
+     * exactly what is already shown, leaves the document clean.
+     */
+    public void loadItems(List<PrioItem> loaded) {
+        boolean wasEmpty = items.isEmpty();
+        List<PrioItem> before = snapshot();
+
+        List<ScoredItem> scored = new ArrayList<>(loaded.size());
+        int order = 1;
+        for (PrioItem item : loaded) {
+            ScoredItem si = new ScoredItem(item, order++);
+            // Every later score edit is the user's, and counts towards dirty.
+            si.businessValueProperty().addListener((obs, was, now) -> recomputeDirty());
+            si.timeCriticalityProperty().addListener((obs, was, now) -> recomputeDirty());
+            si.riskReductionProperty().addListener((obs, was, now) -> recomputeDirty());
+            si.jobSizeProperty().addListener((obs, was, now) -> recomputeDirty());
+            scored.add(si);
+        }
+        items.setAll(scored);
+
+        synced = snapshot();
+        loadOverwrote = !wasEmpty && !synced.equals(before);
+        recomputeDirty();
+    }
+
+    /** The connector took the items: what is on screen is now the stored truth. */
+    public void markSaved() {
+        loadOverwrote = false;
+        synced = snapshot();
+        recomputeDirty();
+    }
+
+    /** The items with their current scores, in the order they were loaded. */
+    public List<PrioItem> snapshot() {
+        return items.stream().map(ScoredItem::snapshot).toList();
+    }
+
+    private void recomputeDirty() {
+        dirty.set(loadOverwrote || !snapshot().equals(synced));
     }
 
     /** The selected connector / exporter name, two-way bound to the top bar. */
     public StringProperty selectedProperty(PluginKind kind) {
         return selected.get(kind);
+    }
+
+    /**
+     * The value assigned to {@code key} of the connector / exporter
+     * {@code name} ({@code ""} if unset). Project-file state: reading or
+     * writing it never affects {@link #dirtyProperty() dirty}.
+     */
+    public String getSetting(PluginKind kind, String name, String key) {
+        Map<String, String> forName = settings(kind).get(name);
+        String value = forName == null ? null : forName.get(key);
+        return value == null ? "" : value;
+    }
+
+    /** Assign a value to {@code key} of {@code name}; blank means unset. */
+    public void setSetting(PluginKind kind, String name, String key, String value) {
+        Map<String, Map<String, String>> settings = settings(kind);
+        if (value == null || value.isEmpty()) {
+            Map<String, String> forName = settings.get(name);
+            if (forName != null) {
+                forName.remove(key);
+                if (forName.isEmpty()) {
+                    settings.remove(name);
+                }
+            }
+        } else {
+            settings.computeIfAbsent(name, n -> new HashMap<>()).put(key, value);
+        }
     }
 
     public boolean isDirty() {
@@ -238,10 +228,5 @@ public class Document implements AutoCloseable {
 
     public ReadOnlyBooleanProperty dirtyProperty() {
         return dirty;
-    }
-
-    @Override
-    public void close() {
-        database.close();
     }
 }
