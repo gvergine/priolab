@@ -18,6 +18,7 @@ import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
+import javafx.scene.control.Accordion;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
@@ -25,12 +26,15 @@ import javafx.scene.control.ComboBox;
 import javafx.scene.control.MenuBar;
 import javafx.scene.control.Label;
 import javafx.scene.control.ProgressIndicator;
+import javafx.scene.control.SplitPane;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.TitledPane;
 import javafx.scene.image.ImageView;
 import javafx.scene.input.KeyEvent;
 import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.stage.FileChooser;
 import javafx.stage.Modality;
@@ -78,6 +82,9 @@ public class MainController {
     private static final double MAX_ZOOM = 2.5;
     private static final double ZOOM_STEP = 1.1;
 
+    /** The console takes the bottom fifth of the window when it is open. */
+    private static final double DEFAULT_CONSOLE_DIVIDER = 0.8;
+
     @FXML
     private BorderPane rootPane;
     @FXML
@@ -86,6 +93,12 @@ public class MainController {
     private Label statusLabel;
     @FXML
     private StackPane contentPane;
+    @FXML
+    private SplitPane mainSplit;
+    @FXML
+    private Accordion consoleAccordion;
+    @FXML
+    private TitledPane consolePane;
     @FXML
     private TextArea logArea;
     @FXML
@@ -136,6 +149,9 @@ public class MainController {
     /** Current UI scale, 1.0 = 100% (see {@link #installZoom()}). */
     private double zoom = 1.0;
 
+    /** Where the vertical divider sits while the console is open, 0..1. */
+    private double consoleDivider = DEFAULT_CONSOLE_DIVIDER;
+
     private final ObjectMapper jsonMapper = new ObjectMapper();
 
     /**
@@ -155,6 +171,7 @@ public class MainController {
         managers.put(PluginKind.EXPORTER, new ConnectorManager(
                 exportersDir == null ? null : Paths.get(exportersDir)));
         installZoom();
+        installConsole();
         sizeWithFont(connectorSettingsIcon, connectorSettingsButton);
         sizeWithFont(exporterSettingsIcon, exporterSettingsButton);
         sizeWithFont(loadIcon, loadButton);
@@ -222,6 +239,44 @@ public class MainController {
             }
             event.consume();
         });
+    }
+
+    /**
+     * The console is an accordion that stays shut until it has something to say.
+     *
+     * <p>Collapsed, the pane is capped at its own preferred height, so the split
+     * divider sits right under the header and cannot be dragged open by
+     * accident; expanded, the cap is lifted and the divider goes back where the
+     * user last left it. Opening or closing it is otherwise entirely the user's
+     * business — PrioLab only ever opens it, never closes it (see
+     * {@link #launch}).
+     */
+    private void installConsole() {
+        SplitPane.setResizableWithParent(consoleAccordion, false);
+        consolePane.expandedProperty().addListener((obs, was, expanded) -> {
+            if (!expanded) {
+                // Remember how tall the user had made it.
+                consoleDivider = mainSplit.getDividerPositions()[0];
+            }
+            syncConsole();
+        });
+        syncConsole();
+    }
+
+    private void syncConsole() {
+        if (consolePane.isExpanded()) {
+            consoleAccordion.setMaxHeight(Double.MAX_VALUE);
+            mainSplit.setDividerPositions(consoleDivider);
+        } else {
+            consoleAccordion.setMaxHeight(Region.USE_PREF_SIZE);
+        }
+    }
+
+    /** Open the console because something went wrong; never close it. */
+    private void revealConsole() {
+        if (!consolePane.isExpanded()) {
+            consolePane.setExpanded(true);
+        }
     }
 
     /**
@@ -331,6 +386,7 @@ public class MainController {
         if (document == null) {
             return;
         }
+        captureLayout();
         try {
             document.save();
         } catch (Exception e) {
@@ -384,6 +440,7 @@ public class MainController {
         }
         List<PrioItem> items = parseItems(output);
         if (items == null) {
+            revealConsole();
             setStatus("Load failed — see the console.");
             return;
         }
@@ -478,6 +535,9 @@ public class MainController {
                         appendLog("[exited with code " + code + "]");
                         running.remove(kind);
                         setRunning(kind, false);
+                        if (code != 0) {
+                            revealConsole();
+                        }
                         onExit.accept(code);
                     }));
             running.put(kind, plugin);
@@ -752,6 +812,12 @@ public class MainController {
             return;
         }
 
+        // Put the dividers and column widths back where this project left them.
+        consoleDivider = document.getLayout().getConsoleDivider() == null
+                ? DEFAULT_CONSOLE_DIVIDER : document.getLayout().getConsoleDivider();
+        syncConsole();
+        documentController.applyLayout(document.getLayout());
+
         // Populate and bind the two selectors in the top bar.
         connectorCombo.getItems().setAll(pluginNames(PluginKind.CONNECTOR));
         connectorCombo.valueProperty().bindBidirectional(
@@ -764,6 +830,20 @@ public class MainController {
 
         document.dirtyProperty().addListener((obs, was, dirty) -> updateTitle());
         updateTitle();
+    }
+
+    /** Take the sizes the user dragged into the project file, ready to be saved. */
+    private void captureLayout() {
+        if (document == null) {
+            return;
+        }
+        if (consolePane.isExpanded()) {
+            consoleDivider = mainSplit.getDividerPositions()[0];
+        }
+        document.getLayout().setConsoleDivider(consoleDivider);
+        if (documentController != null) {
+            documentController.captureLayout(document.getLayout());
+        }
     }
 
     /** Remember this project so the next start reopens it. */

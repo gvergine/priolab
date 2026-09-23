@@ -136,6 +136,11 @@ public final class Document {
         return file;
     }
 
+    /** Split dividers and column widths; captured from the UI before a save. */
+    public Layout getLayout() {
+        return project.getLayout();
+    }
+
     /** The document's name: the project file's own name. */
     public String getName() {
         return file.getFileName().toString();

@@ -1,9 +1,12 @@
 package com.priolab.controller;
 
 import com.priolab.doc.Document;
+import com.priolab.doc.Layout;
 import com.priolab.model.ScoredItem;
 
 import javafx.application.HostServices;
+import javafx.beans.Observable;
+import javafx.beans.binding.Bindings;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.ReadOnlyObjectWrapper;
 import javafx.beans.property.ReadOnlyStringWrapper;
@@ -14,13 +17,17 @@ import javafx.css.PseudoClass;
 import javafx.fxml.FXML;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Hyperlink;
+import javafx.scene.control.SplitPane;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
 import javafx.util.StringConverter;
 
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.function.Function;
 
@@ -52,6 +59,8 @@ public class DocumentController {
     /** Set on left-table rows that are not yet fully scored (see app.css). */
     private static final PseudoClass INCOMPLETE = PseudoClass.getPseudoClass("incomplete");
 
+    @FXML
+    private SplitPane tablesSplit;
     @FXML
     private TableView<ScoredItem> leftTable;
     @FXML
@@ -103,37 +112,105 @@ public class DocumentController {
     // --- Table construction --------------------------------------------------
 
     private void buildLeftTable() {
-        leftTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
         // Light-yellow highlight for any row that is not fully scored yet.
         leftTable.setRowFactory(tv -> new ScoredRow());
 
         // Every column sorts, ascending and descending: the connector's own
         // order, the key, the description, each WSJF input and the result.
+        TableColumn<ScoredItem, String> description = descriptionColumn();
         leftTable.getColumns().setAll(List.of(
                 orderColumn(),
                 idColumn(),
-                descriptionColumn(),
+                description,
                 scoreColumn("UBV", ScoredItem::businessValueProperty),
                 scoreColumn("TC", ScoredItem::timeCriticalityProperty),
-                scoreColumn("RR/RO", ScoredItem::riskReductionProperty),
+                scoreColumn("RROE", ScoredItem::riskReductionProperty),
                 scoreColumn("Size", ScoredItem::jobSizeProperty),
                 wsjfColumn()));
+        giveSlackTo(leftTable, description);
+    }
+
+    /**
+     * Keep the numeric columns at their (minimum) width and let the description
+     * take whatever is left, at every window size.
+     *
+     * <p>None of JavaFX's constrained resize policies can do this: they hand the
+     * slack to the <em>last</em> column, and the description sits in the middle
+     * of the left table. So the table is left unconstrained and the description's
+     * width is computed from what the others use — which also means the user can
+     * still drag any of those others, and the description simply gives way.
+     */
+    private void giveSlackTo(TableView<ScoredItem> table, TableColumn<ScoredItem, ?> flexible) {
+        table.setColumnResizePolicy(TableView.UNCONSTRAINED_RESIZE_POLICY);
+        List<Observable> dependencies = new ArrayList<>();
+        dependencies.add(table.widthProperty());
+        for (TableColumn<ScoredItem, ?> column : table.getColumns()) {
+            if (column != flexible) {
+                dependencies.add(column.widthProperty());
+            }
+        }
+        flexible.prefWidthProperty().bind(Bindings.createDoubleBinding(() -> {
+            double used = 0;
+            for (TableColumn<ScoredItem, ?> column : table.getColumns()) {
+                if (column != flexible) {
+                    used += column.getWidth();
+                }
+            }
+            // Leave room for the vertical scrollbar rather than provoke a
+            // horizontal one every time the list gets long.
+            return Math.max(flexible.getMinWidth(), table.getWidth() - used - 18);
+        }, dependencies.toArray(new Observable[0])));
+    }
+
+    /** Restore the dividers and column widths the user last left behind. */
+    public void applyLayout(Layout layout) {
+        if (layout.getTablesDivider() != null) {
+            tablesSplit.setDividerPositions(layout.getTablesDivider());
+        }
+        applyColumnWidths(leftTable, layout.getLeftColumns());
+        applyColumnWidths(rightTable, layout.getRightColumns());
+    }
+
+    /** Write the current dividers and column widths into {@code layout}. */
+    public void captureLayout(Layout layout) {
+        layout.setTablesDivider(tablesSplit.getDividerPositions()[0]);
+        layout.setLeftColumns(columnWidths(leftTable));
+        layout.setRightColumns(columnWidths(rightTable));
+    }
+
+    private static void applyColumnWidths(TableView<ScoredItem> table, Map<String, Double> widths) {
+        for (TableColumn<ScoredItem, ?> column : table.getColumns()) {
+            Double width = widths.get(column.getText());
+            // The flexible column's width is bound, and derived anyway.
+            if (width != null && width > 0 && !column.prefWidthProperty().isBound()) {
+                column.setPrefWidth(width);
+            }
+        }
+    }
+
+    private static Map<String, Double> columnWidths(TableView<ScoredItem> table) {
+        Map<String, Double> widths = new LinkedHashMap<>();
+        for (TableColumn<ScoredItem, ?> column : table.getColumns()) {
+            if (!column.prefWidthProperty().isBound()) {
+                widths.put(column.getText(), column.getWidth());
+            }
+        }
+        return widths;
     }
 
     private TableColumn<ScoredItem, Integer> orderColumn() {
         TableColumn<ScoredItem, Integer> col = new TableColumn<>("Order");
-        col.setPrefWidth(52);
-        col.setMinWidth(44);
+        col.setMinWidth(48);
+        col.setPrefWidth(48);
         col.setCellValueFactory(cd -> new ReadOnlyObjectWrapper<>(cd.getValue().order()));
         return col;
     }
 
     private void buildRightTable() {
-        rightTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
-
         TableColumn<ScoredItem, Void> priority = new TableColumn<>("Priority");
         priority.setSortable(false);
-        priority.setPrefWidth(60);
+        priority.setMinWidth(62);
+        priority.setPrefWidth(62);
         priority.setCellFactory(col -> new TableCell<>() {
             @Override
             protected void updateItem(Void value, boolean empty) {
@@ -153,6 +230,7 @@ public class DocumentController {
         description.setSortable(false);
 
         rightTable.getColumns().setAll(List.of(priority, wsjf, id, description));
+        giveSlackTo(rightTable, description);
     }
 
     private void resortRight() {
@@ -175,8 +253,8 @@ public class DocumentController {
 
     private TableColumn<ScoredItem, ScoredItem> idColumn() {
         TableColumn<ScoredItem, ScoredItem> col = new TableColumn<>("ID");
-        col.setPrefWidth(86);
         col.setMinWidth(60);
+        col.setPrefWidth(110);
         col.setCellValueFactory(cd -> new ReadOnlyObjectWrapper<>(cd.getValue()));
         col.setComparator(Comparator.comparing(
                 si -> si.item().id(), Comparator.nullsFirst(Comparator.naturalOrder())));
@@ -186,8 +264,9 @@ public class DocumentController {
 
     private TableColumn<ScoredItem, String> descriptionColumn() {
         TableColumn<ScoredItem, String> col = new TableColumn<>("Description");
-        col.setPrefWidth(180);
-        col.setMinWidth(70);
+        // Small enough that the narrower result pane still fits its four
+        // columns without a horizontal scrollbar.
+        col.setMinWidth(80);
         col.setCellValueFactory(cd ->
                 new ReadOnlyStringWrapper(cd.getValue().item().description()));
         col.setComparator(Comparator.nullsFirst(String.CASE_INSENSITIVE_ORDER));
@@ -196,8 +275,8 @@ public class DocumentController {
 
     private TableColumn<ScoredItem, Double> wsjfColumn() {
         TableColumn<ScoredItem, Double> col = new TableColumn<>("WSJF");
-        col.setPrefWidth(62);
-        col.setMinWidth(50);
+        col.setMinWidth(56);
+        col.setPrefWidth(56);
         col.setCellValueFactory(cd -> cd.getValue().wsjfProperty());
         col.setComparator(blankLowest());
         col.setCellFactory(c -> new TableCell<>() {
@@ -213,10 +292,10 @@ public class DocumentController {
     private TableColumn<ScoredItem, Integer> scoreColumn(
             String title, Function<ScoredItem, ObjectProperty<Integer>> extractor) {
         TableColumn<ScoredItem, Integer> col = new TableColumn<>(title);
-        col.setPrefWidth(74);
+        col.setPrefWidth(58);
         // Floor the width: below this the ComboBox has no room to draw the
         // selected number and renders blank, which looks like a lost selection.
-        col.setMinWidth(56);
+        col.setMinWidth(58);
         col.setComparator(blankLowest());
         col.setCellValueFactory(cd -> extractor.apply(cd.getValue()));
         col.setCellFactory(c -> new ScoreCell(extractor));

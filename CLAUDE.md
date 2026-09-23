@@ -221,9 +221,13 @@ is logged in the console and treated as blank rather than failing the load.
 Items go out in **priority order** (WSJF descending, unscored last); nothing
 else about the order is meaningful, since a connector matches items by `id`.
 
-The main window's **Console pane** (bottom of a vertical `SplitPane`, with a
-**Clear** button) shows the run: the command line, the environment PrioLab
-passed, then every stdout and stderr line, appended via `Platform.runLater`.
+The main window's **Console** shows the run: the command line, the environment
+PrioLab passed, then every stdout and stderr line, appended via
+`Platform.runLater`. It is an **accordion at the bottom of the vertical
+`SplitPane`, collapsed to its header** until either the user opens it or a run
+**exits non-zero** (or a load returns something that is not a JSON array) — then
+PrioLab opens it for them. PrioLab never closes it again: once opened, it stays
+as the user left it.
 
 `examples/connectors/filebased` is a complete connector in ~40 lines of Python:
 it keeps its own `db.json`, serves it on `operation=load` and writes the four
@@ -241,17 +245,30 @@ is no separate dialog). **There is no Save.** The file holds only this:
   "connector": "filebased",
   "exporter": null,
   "connectorSettings": { "filebased": { "file": "/home/me/db.json" } },
-  "exporterSettings": {}
+  "exporterSettings": {},
+  "layout": {
+    "consoleDivider": 0.8,
+    "tablesDivider": 0.65,
+    "leftColumns": { "Order": 48.0, "ID": 110.0, "…": 58.0 },
+    "rightColumns": { "Priority": 62.0, "…": 56.0 }
+  }
 }
 ```
 
-— which connector and exporter the project uses and the values given to their
-manifest keys. **The items are not in it**: the connector loads them and takes
+— which connector and exporter the project uses, the values given to their
+manifest keys, and where the user dragged the dividers and column edges
+(`doc/Layout.java`). **The items are not in it**: the connector loads them and takes
 them back on a save, so the project file only remembers how to reach them.
 
 It is written **silently**: when the document is replaced and when the app exits
-(`MainController.shutdown()` → `saveProjectQuietly()`), never through a menu
-item, and editing any of it never marks the document dirty.
+(`MainController.shutdown()` → `saveProjectQuietly()`, which first pulls the
+current sizes out of the UI via `captureLayout()`), never through a menu item,
+and editing any of it never marks the document dirty.
+
+The **expanded state of the console is deliberately not stored**: it is
+collapsed on every start, since its rule is "shut unless something went wrong".
+Only its *height* — the divider position it returns to when opened — is
+remembered.
 
 ### Documents & editing
 An open project is a `doc/Document.java`: the `Project` file plus the items
@@ -317,6 +334,12 @@ exporter — and shows only that kind's spinner. The console pane stays live
 (including **Clear**) so the output can be watched, and the window's close
 button still works: `shutdown()` kills the child process.
 
+**Sizes are remembered per project.** `DocumentController.applyLayout` /
+`captureLayout` restore and collect the tables' divider and every unbound column
+width, and `MainController` does the same for the console divider; all of it
+lands in the project file's `layout` (see *The project file*). Defaults when a
+project has none: console at **20%** of the window when open, tables **65/35**.
+
 **Zoom.** The main window scales with **Ctrl+scroll** anywhere in it (also
 Ctrl+plus / Ctrl+minus, and Ctrl+0 back to 100%), clamped to 60%–250% in 10%
 steps, with the level echoed in the status bar. `MainController.installZoom()`
@@ -331,12 +354,25 @@ only applies to the main window, not the modal dialogs.
 
 **Center view** (`DocumentController`) is a **horizontal `SplitPane`** of two
 `TableView`s over `model/ScoredItem.java` (a `PrioItem` plus editable WSJF
-scoring state). Each row's `id` is a `Hyperlink` that opens the item's `url` via
-`HostServices.showDocument`.
+scoring state), split **65 / 35** by default. Each row's `id` is a `Hyperlink`
+that opens the item's `url` via `HostServices.showDocument`.
+
+**Column widths.** Every numeric column (Order, the four inputs, WSJF,
+Priority) sits at its *minimum* — `pref == min` — and **Description takes
+whatever is left**, in both tables. None of JavaFX's constrained resize
+policies can express that: they hand the slack to the *last* column, and
+Description sits in the middle of the left table. So the tables use
+`UNCONSTRAINED_RESIZE_POLICY` and `DocumentController.giveSlackTo(...)` binds
+the description's `prefWidth` to `table width − Σ(other columns) − 18` (the 18
+keeps a vertical scrollbar from provoking a horizontal one). Every other column
+therefore stays draggable, and the description simply gives way; the
+description itself is not dragged directly, it is always what is left over.
+`ID` is the one text column with a comfortable default (110) rather than a
+minimum.
 
 - **Left table** has: **Order** (1-based, the sequence in which the connector
   emitted the item — stored on `ScoredItem`), **ID**, **Description**, the four
-  WSJF inputs — **UBV**, **TC**, **RR/RO**, **Size** — each an in-cell `ComboBox`
+  WSJF inputs — **UBV**, **TC**, **RROE**, **Size** — each an in-cell `ComboBox`
   of *blank* (default, = `null`) or a modified-Fibonacci number
   (`1, 2, 3, 5, 8, 13, 20, 40, 100`), and a computed **WSJF** column. **Every
   column sorts**, ascending and descending, by clicking its header — including
@@ -396,6 +432,7 @@ src/main/java/com/priolab/
   controller/DocumentController.java    center split view: WSJF scoring + result tables
   doc/Document.java                open project: project file + items + dirty
   doc/Project.java                 the .json project file (Jackson bean)
+  doc/Layout.java                  remembered dividers and column widths
   model/PrioItem.java              one item: id/description/url + UBV/TC/RROE/JS
   model/ScoredItem.java            PrioItem + editable WSJF inputs + computed WSJF
   model/PluginKind.java            CONNECTOR (both ways) vs EXPORTER (one way)

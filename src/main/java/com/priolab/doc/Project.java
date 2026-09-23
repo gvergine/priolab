@@ -13,7 +13,8 @@ import java.util.Map;
  *   "connector": "filebased",
  *   "exporter": null,
  *   "connectorSettings": { "filebased": { "file": "/home/me/db.json" } },
- *   "exporterSettings": {}
+ *   "exporterSettings": {},
+ *   "layout": { "consoleDivider": 0.8, "tablesDivider": 0.65, … }
  * }
  * }</pre>
  *
@@ -34,6 +35,9 @@ public class Project {
 
     /** {@code exporter name -> (manifest key -> value)}. */
     private Map<String, Map<String, String>> exporterSettings = new LinkedHashMap<>();
+
+    /** Split dividers and column widths, as the user left them. */
+    private Layout layout = new Layout();
 
     public int getVersion() {
         return version;
@@ -75,5 +79,13 @@ public class Project {
     public void setExporterSettings(Map<String, Map<String, String>> exporterSettings) {
         this.exporterSettings =
                 exporterSettings == null ? new LinkedHashMap<>() : exporterSettings;
+    }
+
+    public Layout getLayout() {
+        return layout;
+    }
+
+    public void setLayout(Layout layout) {
+        this.layout = layout == null ? new Layout() : layout;
     }
 }
