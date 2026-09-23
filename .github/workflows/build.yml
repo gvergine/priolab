@@ -27,14 +27,14 @@ jobs:
     # support and the result runs on newer ones too.
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'          # matches the Gradle toolchain
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       # appimagetool shells out to mksquashfs.
       - name: Install squashfs-tools
@@ -55,14 +55,14 @@ jobs:
           cd build/jpackage
           zip -qry "../distributions/PrioLab-${{ steps.project.outputs.version }}-linux-x86_64.zip" priolab
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: priolab-linux-appimage
           path: build/distributions/*.AppImage
           if-no-files-found: error
           retention-days: 14
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: priolab-linux-portable
           path: build/distributions/*.zip
@@ -72,14 +72,14 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       - name: Read the project version
         id: project
@@ -98,7 +98,7 @@ jobs:
           Compress-Archive -Path build/jpackage/priolab `
             -DestinationPath "build/distributions/PrioLab-${{ steps.project.outputs.version }}-windows-x64.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: priolab-windows-portable
           path: build/distributions/*.zip
@@ -113,7 +113,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
